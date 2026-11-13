@@ -5,31 +5,46 @@ specialist analysts — is checked against the real code. Confirmed high/critica
 findings then face a critic whose only job is to refute them. What survives is
 L1 (traced in code); anything the critic breaks is demoted, not shown in the PR.
 """
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 
 from . import GROUND_RULES, SEV_RANK
 from .analysts import changed_region_listing
 
+# Verification rules adapted from Cloudflare's security-audit skill (MIT), see NOTICE.
 TRIAGE_SYSTEM = GROUND_RULES + (
-    "\nYou are the TRIAGE reviewer. Decide whether the hypothesis is real in THIS code. "
-    "Trace the data from its source to the sink through the listing. Judge IMPACT, not "
-    "patterns: an endpoint that is public by design (tracking pixel, health check, webhook "
-    "with its own signature check, login page) is NOT a finding unless it leaks data, performs "
-    "a privileged or state-changing action, or can be abused (open redirect, SSRF, enumeration, "
-    "amplification). Missing authentication alone is not enough. Data classes in the hypothesis "
-    "(pii, health, payment …) come from an automated architecture sketch and are UNVERIFIED: only "
-    "claim data exposure if the code shows that data being returned or sent. Return JSON: "
-    "{\"verdict\": \"confirmed\"|\"rejected\"|\"uncertain\", \"severity\": critical|high|medium|low, "
-    "\"file\": path, \"line_start\": int, \"line_end\": int, \"trace\": [{\"file\", \"line\", "
-    "\"label\": short hop description}], \"reasoning\": 2-4 sentences, no code}."
+    "\nYou are the VERIFIER. You did not write this hypothesis — try to decide it from the code alone.\n"
+    "1. Trace it: the first hop must be a real LOWER-TRUST entrypoint (request data, message, "
+    "file, model output, another tenant's record) and the last hop the claimed SINK or boundary "
+    "effect. No real entrypoint → rejected.\n"
+    "2. Reconstruct the strongest controls on that path before deciding: validation, allow-lists, "
+    "parameterisation, escaping, framework defaults, authentication, object-level authorization "
+    "(queries scoped to the user/tenant), and containment. A control that blocks the path → rejected.\n"
+    "3. Judge IMPACT, not patterns. Public-by-design endpoints (tracking pixel, health check, signed "
+    "webhook, login, static page) are not findings unless they leak data, change state, or enable "
+    "abuse (open redirect, SSRF, enumeration). Missing authentication alone is not enough. Weak "
+    "hashes used for non-security purposes (cache keys, ETags) are not findings. A permissive rule "
+    "that is the intended function (public HTTPS load balancer) is not a finding.\n"
+    "4. Data classes in the hypothesis (pii, health, payment …) come from an automated sketch and "
+    "are UNVERIFIED: claim data exposure only if the code shows that data leaving.\n"
+    "5. Severity must not exceed what the code demonstrates.\n"
+    "Verdicts: confirmed = complete source→sink path with no blocking control; "
+    "uncertain = path is real but a decisive fact is outside the code (deployment, config); "
+    "rejected = refuted by the code, a control, or no meaningful impact.\n"
+    "Return JSON: {\"verdict\": \"confirmed\"|\"rejected\"|\"uncertain\", \"severity\": "
+    "critical|high|medium|low, \"file\": path, \"line_start\": int, \"line_end\": int, "
+    "\"trace\": [{\"file\", \"line\", \"label\": \"entrypoint|propagation|sink: short hop\"}], "
+    "\"controls_checked\": [short strings], \"reasoning\": 2-4 sentences, no code}."
 )
 
 CRITIC_SYSTEM = GROUND_RULES + (
-    "\nYou are the ADVERSARIAL CRITIC. Another reviewer claims the finding below is exploitable. "
-    "Your job is to REFUTE it: look for validation, framework protection, authorization, "
-    "unreachable code, test-only code, static responses with no data, behaviour that is public by "
-    "design, or wrong assumptions. Only refute with a concrete line "
-    "reference. Return JSON: {\"refuted\": bool, \"why\": 1-3 sentences, \"line\": int|null}."
+    "\nYou are an INDEPENDENT CRITIC. Another reviewer claims the finding below is exploitable. "
+    "Re-read every cited line yourself and try to REFUTE it: a missing or fake entrypoint, input "
+    "validation or allow-listing, parameterisation, escaping, a framework protection, an "
+    "authorization check or tenant-scoped query, unreachable or test-only code, a static response "
+    "with no data, behaviour that is public by design, or an impact that is not meaningful. "
+    "Do not refute on speculation — only with a concrete line that blocks the path. "
+    "Return JSON: {\"refuted\": bool, \"why\": 1-3 sentences, \"line\": int|null}."
 )
 
 
@@ -66,6 +81,17 @@ def _context(root, h, changed):
     parts = [f'## {c.path}\n' + changed_region_listing(root, c, context=15, cap=4000)
              for c in changed if c.added][:8]
     return '\n\n'.join(parts)[:24000]
+
+
+def region_hash(root, h):
+    """Hash of the code a verdict was based on (file region around the finding). If it is
+    unchanged, a previous rejection still holds. Only the hash leaves the machine."""
+    from ..gitops import read
+    if not h.file_path:
+        return ''
+    start = max(1, (h.line_start or 1) - 25)
+    text = read(root, h.file_path, start, (h.line_end or h.line_start or 1) + 25, pad=0)
+    return hashlib.sha256(f'{h.file_path}\n{text}'.encode()).hexdigest() if text else ''
 
 
 def _triage_one(h, root, changed, llm, tracer, fork):
@@ -163,14 +189,31 @@ def dedupe_confirmed(hyps):
     return merged
 
 
-def triage_all(hyps, root, changed, llm, tracer, parallel=4):
+def triage_all(hyps, root, changed, llm, tracer, parallel=4, rejections=frozenset(), memory=None):
+    """memory (dict) collects 'rejected' records and 'reused' keys for the backend."""
+    memory = memory if memory is not None else {}
+    memory.setdefault('rejected', [])
+    memory.setdefault('reused', [])
     merged = merge(hyps)
     active = [h for h in merged if not h.suppressed]
     with tracer.step('orchestrator', f'Triage {len(active)} hypotheses against the code') as s:
+        todo = []
+        for h in active:
+            h.region_hash = region_hash(root, h)
+            key = f'{h.fingerprint}:{h.region_hash}'
+            if h.region_hash and key in rejections:
+                h.verdict, h.confidence = 'rejected', 'possible'
+                h.reasoning = 'Refuted in an earlier review; the code region is unchanged.'
+                memory['reused'].append(key)
+            else:
+                todo.append(h)
+        if len(todo) < len(active):
+            tracer.skip('triage', f'Reuse {len(active) - len(todo)} earlier verdict(s)',
+                        'code unchanged since the hypothesis was refuted — no model call needed')
         with ThreadPoolExecutor(max_workers=max(1, parallel)) as ex:
-            forks = [tracer.fork() for _ in active]
+            forks = [tracer.fork() for _ in todo]
             list(ex.map(lambda hf: _triage_one(hf[0], root, changed, llm, tracer, hf[1]),
-                        zip(active, forks)))
+                        zip(todo, forks)))
         n_dupes = dedupe_confirmed(active)
         # Every surfaced finding (medium+) must survive the critic — noise costs trust.
         hot = [h for h in active if h.verdict == 'confirmed' and h.rank >= 2]
@@ -179,6 +222,11 @@ def triage_all(hyps, root, changed, llm, tracer, parallel=4):
                 forks = [tracer.fork() for _ in hot]
                 list(ex.map(lambda hf: _critic_one(hf[0], root, changed, llm, tracer, hf[1]),
                             zip(hot, forks)))
+        for h in todo:
+            if h.verdict == 'rejected' and h.region_hash:
+                memory['rejected'].append({'fingerprint': h.fingerprint, 'region_hash': h.region_hash,
+                                           'title': h.title[:300], 'file_path': h.file_path,
+                                           'reason': h.reasoning[:1000]})
         confirmed = [h for h in active if h.verdict == 'confirmed']
         s.summary(f"{len(confirmed)} confirmed ({n_dupes} duplicates merged), "
                   f"{len([h for h in active if h.verdict == 'rejected'])} rejected, "

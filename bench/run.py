@@ -90,7 +90,11 @@ def triage(llm, t, c):
 def analyze(llm, t, c):
     fam = c['vuln']['family'] if c['vuln'] else None
     spec = SPECIALIST.get(fam) or SPEC_BY_HYP_CWE.get(c['hypothesis']['cwe'], 'logic')
-    system = SYSTEM_TMPL.format(name=spec.upper(), scope=SPECIALISTS[spec])
+    try:
+        from t7.agents.checklists import checklist
+        system = SYSTEM_TMPL.format(name=spec.upper(), scope=SPECIALISTS[spec], checklist=checklist(spec))
+    except ImportError:  # older agent versions (baseline runs)
+        system = SYSTEM_TMPL.format(name=spec.upper(), scope=SPECIALISTS[spec])
     d = t.run('analyze', lambda: llm.json('analyze', system,
                                           f"## {c['path']}\n{numbered(c['code'], mark_all=True)}", default={}))
     found = [f for f in (d.get('findings') or []) if isinstance(f, dict)]

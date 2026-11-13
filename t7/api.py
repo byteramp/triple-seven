@@ -71,6 +71,9 @@ class Byteramp:
     def finish(self, run_id, **body):
         return self._req('POST', f'runs/{run_id}/finish/', body)
 
+    def decision(self, **body):
+        return self._req('POST', 'decisions/', body)
+
     def llm(self, purpose, system, prompt, json_mode=False, max_tokens=2000, temperature=0.1):
         return self._req('POST', 'llm/', {'purpose': purpose, 'system': system, 'prompt': prompt,
                                           'json': json_mode, 'max_tokens': max_tokens,

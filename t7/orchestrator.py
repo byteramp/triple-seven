@@ -21,6 +21,8 @@ from .agents.prover import prove_one
 from .agents.reporter import (github_context, gitlab_context, post_mr, post_pr, select_for_pr,
                               write_bundle, write_ci_report, write_last_scan)
 from .agents.triage import TRIAGE_SYSTEM, _context, triage_all
+from .ci import ZERO, merges, push_context, set_github_status
+from .codeowners import CodeOwners
 from .api import APIError, Byteramp
 from .config import Config
 from .context import detect
@@ -65,8 +67,12 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
     api = Byteramp(cfg)
     llm = LLM(cfg, api)
     gh = (github_context() or gitlab_context()) if ci else None
+    push = push_context() if ci and not gh else None
+    push_base = (push or {}).get('before') or ''
+    if push_base == ZERO:
+        push_base = ''
 
-    base_sha = gitops.resolve_base(root, base or (gh or {}).get('base_sha') or None)
+    base_sha = gitops.resolve_base(root, base or (gh or {}).get('base_sha') or push_base or None)
     head = gitops.head_sha(root)
     changed = gitops.changed_files(root, base_sha, include_worktree=not ci, ignore=cfg.ignore_paths)
     profile = detect(root, cfg)
@@ -74,7 +80,7 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
     policy, run_id = {}, None
     if not cfg.offline:
         try:
-            r = api.start_run(trigger='pull_request' if gh else ('push' if ci else 'local'),
+            r = api.start_run(trigger='pull_request' if gh else ('push' if push or ci else 'local'),
                               ref=os.environ.get('GITHUB_HEAD_REF') or gitops.git(
                                   root, 'rev-parse', '--abbrev-ref', 'HEAD').strip(),
                               base_sha=base_sha, head_sha=head,
@@ -99,6 +105,9 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
     tracer = Tracer(None if cfg.offline else api, run_id, quiet=quiet)
     suppressed = set(policy.get('suppressed_fingerprints', []))
     sec_ids, result = {}, {'gate': {'verdict': 'pass'}, 'summary_markdown': ''}
+    memory = {'rejected': [], 'reused': []}
+    rejections = frozenset(policy.get('rejections', []))
+    owners = CodeOwners.load(root)
     try:
         with tracer.step('orchestrator', f'Review {len(changed)} changed file(s)',
                          base=base_sha[:12], head=head[:12]) as root_step:
@@ -125,8 +134,12 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                 hyps += run_analysts(chain, changed, root, llm, tracer, cfg.parallel)
                 for h in hyps:
                     h.suppressed = h.suppressed or h.fingerprint in suppressed
-                hyps = triage_all(hyps, root, changed, llm, tracer, cfg.parallel)
+                hyps = triage_all(hyps, root, changed, llm, tracer, cfg.parallel,
+                                  rejections=rejections, memory=memory)
                 confirmed = [h for h in hyps if h.verdict == 'confirmed' and not h.suppressed]
+                for h in hyps:
+                    if h.file_path:
+                        h.owners = owners.owners(h.file_path)
 
                 resolved = _recheck_open(policy.get('open_findings', []), confirmed, root, changed,
                                          llm, tracer)
@@ -169,6 +182,8 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
             result = {**result, **api.finish(
                 run_id, resolved_fingerprints=result.get('resolved', []),
                 committed_patches=_committed_fixes(root),
+                rejected=memory['rejected'], reused_rejections=memory['reused'],
+                merges=merges(root, push_base) if push else [],
                 stats={'changed_files': len(changed), 'llm_calls': llm.calls,
                        'llm_chars_in': llm.chars_in, 'llm_model': llm.model,
                        'seconds': round(time.time() - started, 1),
@@ -177,6 +192,9 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                 try:
                     poster = post_pr if gh['kind'] == 'github' else post_mr
                     poster(gh, result['summary_markdown'], result.get('surfaced', []), sec_ids, tracer)
+                    if gh['kind'] == 'github':
+                        set_github_status(gh, (result.get('gate') or {}).get('verdict', 'pass'))
+                        result['status_posted'] = True
                 except Exception as e:  # noqa: BLE001
                     print(f't7: could not post to the pull/merge request: {e}', file=sys.stderr)
                 tracer.flush()

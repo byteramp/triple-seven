@@ -53,6 +53,8 @@ class Hypothesis:
     proofs: list = field(default_factory=list)
     test_patch: str = ''
     suppressed: bool = False
+    region_hash: str = ''
+    owners: list = field(default_factory=list)
 
     @property
     def rank(self):
@@ -67,5 +69,5 @@ class Hypothesis:
             'description': self.description, 'attack_scenario': self.attack_scenario,
             'recommendation': self.recommendation, 'source': self.source,
             'confidence': self.confidence, 'proof_level': self.proof_level,
-            'surfaced_in_pr': surfaced, 'fix': self.fix, 'proofs': self.proofs,
+            'surfaced_in_pr': surfaced, 'fix': self.fix, 'proofs': self.proofs, 'owners': self.owners,
         }

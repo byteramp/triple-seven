@@ -4,6 +4,7 @@
   t7 fix  <SEC-REQ-ID>          apply a verified fix (and its regression test) locally
   t7 list                       fixes available from the last local scan
   t7 doctor                     check token, model provider and test tooling
+  t7 command                    apply /t7 decisions typed in a PR comment (CI)
   t7 mcp                        MCP server for Claude Code, Cursor, VS Code, Codex …
 """
 import argparse
@@ -48,6 +49,8 @@ def cmd_scan(a):
     else:
         _print_human(res)
     verdict = (res.get('gate') or {}).get('verdict', 'pass')
+    if res.get('status_posted'):
+        return 0   # the "Triple Seven" commit status carries the gate (can be cleared by /t7 decisions)
     return 1 if verdict == 'block' else 0
 
 
@@ -126,6 +129,8 @@ def main(argv=None):
     f.set_defaults(fn=cmd_fix)
     sub.add_parser('list', help='list fixes from the last scan').set_defaults(fn=cmd_list)
     sub.add_parser('doctor', help='check setup').set_defaults(fn=cmd_doctor)
+    sub.add_parser('command', help='apply /t7 decisions from a PR comment (GitHub Actions)').set_defaults(
+        fn=lambda a: __import__('t7.commands', fromlist=['run_command']).run_command())
     sub.add_parser('mcp', help='run as an MCP server (stdio) for IDE assistants').set_defaults(
         fn=lambda a: __import__('t7.mcp', fromlist=['serve']).serve() or 0)
     a = p.parse_args(argv)

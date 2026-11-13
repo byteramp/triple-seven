@@ -57,12 +57,19 @@ team*) so runs are attributed and one person can be revoked on their own.
 ```yaml
 # .github/workflows/triple-seven.yml
 name: Triple Seven
-on: pull_request
+on:
+  pull_request:
+  push:
+    branches: [main]          # review coverage: which merges were reviewed
+  issue_comment:
+    types: [created]          # /t7 accept-risk | false-positive | not-applicable | reopen
 permissions:
   contents: read
   pull-requests: write
+  statuses: write             # the "Triple Seven" commit status carries the merge gate
 jobs:
   t7:
+    if: github.event_name != 'issue_comment' || startsWith(github.event.comment.body, '/t7')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -71,6 +78,12 @@ jobs:
         with:
           token: ${{ secrets.T7_TOKEN }}
 ```
+
+Protect the branch on the **Triple Seven** commit status (not the job). A
+collaborator can clear a blocking finding from the PR with
+`/t7 accept-risk SEC-REQ-… <reason>` — the decision is recorded with an audit
+trail and the status flips to success. Each finding in the PR comment also has
+a ready prompt for Claude Code, Cursor, Codex or Copilot.
 
 The PR comment and one-click suggested changes are posted with the runner's own
 `GITHUB_TOKEN`. Byteramp needs no access to your repository.

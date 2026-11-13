@@ -5,6 +5,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 
 from . import GROUND_RULES, Hypothesis
+from .checklists import checklist
 from .planner import SPECIALISTS
 
 SPEC_FILES = {
@@ -13,7 +14,7 @@ SPEC_FILES = {
 }
 
 SYSTEM_TMPL = GROUND_RULES + (
-    "\nYou are the {name} SPECIALIST. Scope: {scope}.\n"
+    "\nYou are the {name} SPECIALIST. Scope: {scope}.\nChecklist: {checklist}\n"
     "Review ONLY the changed regions marked with '>>' and their direct context. Report real, "
     "exploitable weaknesses introduced or exposed by this change. Return JSON: "
     "{{\"findings\": [{{\"title\", \"severity\": critical|high|medium|low, \"cwe\": \"CWE-n\", "
@@ -69,7 +70,8 @@ def _run_one(name, why, files, root, llm, tracer, fork):
                 return []
             listing = '\n\n'.join(f'## {f.path}\n{changed_region_listing(root, f)}'
                                   for f in relevant)[:70000]
-            system = SYSTEM_TMPL.format(name=name.upper(), scope=SPECIALISTS[name])
+            system = SYSTEM_TMPL.format(name=name.upper(), scope=SPECIALISTS[name],
+                                        checklist=checklist(name))
             data = llm.json('analyze', system, listing, default={}) or {}
             out = []
             for item in (data.get('findings') or [])[:6]:

@@ -215,3 +215,64 @@ def test_gitlab_mr_context_and_note(monkeypatch, tmp_path):
     disc = calls[2]
     assert disc[1].endswith('/discussions') and disc[2]['position']['new_line'] == 2
     assert '```suggestion:-0+0' in disc[2]['body']
+
+
+def test_command_parsing():
+    from t7.commands import parse
+    body = ("Thanks!\n/t7 accept-risk SEC-REQ-SHOP-004 Only reachable from the VPN; WAF in front.\n"
+            "/t7 false-positive sec-req-shop-005 enum value, never user input\n/t7 reopen SEC-REQ-SHOP-001")
+    assert parse(body) == [('accept_risk', 'SEC-REQ-SHOP-004', 'Only reachable from the VPN; WAF in front.'),
+                           ('false_positive', 'SEC-REQ-SHOP-005', 'enum value, never user input'),
+                           ('reopen', 'SEC-REQ-SHOP-001', '')]
+    assert parse('/t7 delete-everything SEC-REQ-X-1 now') == []
+
+
+def test_untrusted_commenter_cannot_decide(tmp_path, monkeypatch):
+    import json as _json
+    from t7 import commands
+    ev = {'issue': {'number': 7, 'pull_request': {}}, 'comment': {
+        'id': 1, 'body': '/t7 accept-risk SEC-REQ-A-001 because reasons here', 'user': {'login': 'mallory'},
+        'author_association': 'NONE'}}
+    p = tmp_path / 'ev.json'
+    p.write_text(_json.dumps(ev))
+    monkeypatch.setenv('GITHUB_EVENT_NAME', 'issue_comment')
+    monkeypatch.setenv('GITHUB_EVENT_PATH', str(p))
+    posted, decided = [], []
+    monkeypatch.setattr(commands, '_gh', lambda m, u, t, b=None: posted.append(b))
+    monkeypatch.setattr(commands.Byteramp, 'decision', lambda self, **k: decided.append(k))
+    monkeypatch.setattr(commands.urllib.request, 'urlopen', lambda *a, **k: None)
+    commands.run_command()
+    assert decided == [] and 'only repository collaborators' in posted[0]['body']
+
+
+def test_merges_from_git_history(tmp_path):
+    import subprocess as sp
+    from t7.ci import merges
+    r = tmp_path
+    def g(*a): sp.run(['git', '-c', 'user.email=t@t', '-c', 'user.name=dev', *a], cwd=r, check=True, capture_output=True)
+    g('init', '-q', '-b', 'main'); (r / 'a').write_text('1'); g('add', '-A'); g('commit', '-qm', 'init')
+    base = sp.run(['git', 'rev-parse', 'HEAD'], cwd=r, capture_output=True, text=True).stdout.strip()
+    (r / 'a').write_text('2'); g('commit', '-qam', 'Add export (#12)')
+    (r / 'a').write_text('3'); g('commit', '-qam', 'Merge branch x into main', '-m', 'See merge request acme/app!34')
+    (r / 'a').write_text('4'); g('commit', '-qam', 'hotfix straight to main')
+    ms = merges(r, base)
+    assert [m['pr_number'] for m in ms] == [None, 34, 12]
+
+
+def test_rejection_memory_skips_model(repo, monkeypatch):
+    from t7.agents import Hypothesis
+    from t7.agents.triage import region_hash, triage_all
+    from t7.trace import Tracer
+    from t7 import gitops
+    root = gitops.repo_root()
+    h = Hypothesis('fp1', 'Something', 'high', cwe='CWE-89', file_path='app/users.py', line_start=6)
+    key = f'fp1:{region_hash(root, h)}'
+    calls = []
+
+    class NoLLM:
+        def json(self, *a, **k):
+            calls.append(a)
+            return {}
+    mem = {}
+    out = triage_all([h], root, [], NoLLM(), Tracer(quiet=True), rejections={key}, memory=mem)
+    assert out[0].verdict == 'rejected' and calls == [] and mem['reused'] == [key]

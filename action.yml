@@ -48,4 +48,9 @@ runs:
         T7_LLM_BASE_URL: ${{ inputs.llm-base-url }}
         T7_LLM_API_KEY: ${{ inputs.llm-api-key }}
         GITHUB_TOKEN: ${{ github.token }}
-      run: t7 scan --ci ${{ inputs.fix == 'true' && ' ' || '--no-fix' }}
+      run: |
+        if [ "${{ github.event_name }}" = "issue_comment" ]; then
+          t7 command
+        else
+          t7 scan --ci ${{ inputs.fix == 'true' && ' ' || '--no-fix' }}
+        fi
