@@ -79,7 +79,12 @@ def triage(llm, t, c):
         cr = t.run('critic', lambda: llm.json('critic', CRITIC_SYSTEM,
                                               f"FINDING: {h['title']} ({h['cwe']}) at {c['path']}\n"
                                               f"Reasoning: {d.get('reasoning', '')}\n\nCODE:\n{code}", default={}))
-        if cr.get('refuted') and cr.get('line'):
+        try:
+            from t7.agents.triage import critic_refutes
+            refuted = critic_refutes(cr, c['code'])
+        except ImportError:  # baseline agent versions
+            refuted = bool(cr.get('refuted') and cr.get('line'))
+        if refuted:
             final = 'refuted'
     expect_vuln = c['vuln'] is not None
     correct = (final == 'confirmed') if expect_vuln else (final != 'confirmed')
@@ -181,6 +186,9 @@ def main():
         'model': a.model,
         'triage_recall': round(sum(r['correct'] for r in vul) / len(vul), 3) if vul else None,
         'triage_decoy_rejection': round(sum(r['correct'] for r in dec) / len(dec), 3) if dec else None,
+        # Triage alone (before the critic) — shows how much the critic adds or removes.
+        'triage_only_recall': round(sum(r['triage'] == 'confirmed' for r in vul) / len(vul), 3) if vul else None,
+        'triage_only_decoy_rejection': round(sum(r['triage'] != 'confirmed' for r in dec) / len(dec), 3) if dec else None,
         'triage_accuracy': round(sum(r['correct'] for r in tri) / len(tri), 3) if tri else None,
         'analyze_recall': round(sum(r['hit'] for r in ana if r['vulnerable']) /
                                 max(1, sum(1 for r in ana if r['vulnerable'])), 3) if ana else None,

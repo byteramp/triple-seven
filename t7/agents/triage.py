@@ -39,13 +39,28 @@ TRIAGE_SYSTEM = GROUND_RULES + (
 
 CRITIC_SYSTEM = GROUND_RULES + (
     "\nYou are an INDEPENDENT CRITIC. Another reviewer claims the finding below is exploitable. "
-    "Re-read every cited line yourself and try to REFUTE it: a missing or fake entrypoint, input "
-    "validation or allow-listing, parameterisation, escaping, a framework protection, an "
-    "authorization check or tenant-scoped query, unreachable or test-only code, a static response "
-    "with no data, behaviour that is public by design, or an impact that is not meaningful. "
-    "Do not refute on speculation — only with a concrete line that blocks the path. "
-    "Return JSON: {\"refuted\": bool, \"why\": 1-3 sentences, \"line\": int|null}."
+    "Re-read the cited lines and check whether a concrete control in THIS code blocks the attack: "
+    "input validation or an allow-list, parameterisation, escaping, an authorization check or a "
+    "tenant-scoped query, the code being unreachable or test-only, or a static response with no data. "
+    "If such a control exists, quote the exact line of code that implements it. If the attack works "
+    "as described, say so — do not refute on speculation, on the attacker needing to be logged in, or "
+    "on controls you cannot see. Return JSON: {\"refuted\": bool, \"control\": "
+    "\"validation|allowlist|parameterised|escaping|authorization|unreachable|static|other|none\", "
+    "\"quote\": \"the exact blocking line, copied verbatim, or empty\", \"line\": int|null, "
+    "\"why\": 1-2 sentences}."
 )
+
+
+def critic_refutes(d, code_text):
+    """Accept a refutation only with a verbatim quote of the blocking control that really is in
+    the code and is not just the vulnerable line itself. Small models refute everything otherwise."""
+    if not isinstance(d, dict) or not d.get('refuted'):
+        return False
+    quote = ' '.join(str(d.get('quote') or '').split())
+    if len(quote) < 8 or str(d.get('control', '')).lower() in ('', 'none'):
+        return False
+    flat = ' '.join(code_text.split())
+    return quote in flat
 
 
 def _key(h):
@@ -151,9 +166,10 @@ def _critic_inner(h, root, changed, llm, tracer, fork):
                          f'FINDING: {h.title} ({h.severity}, {h.cwe}) at {h.file_path}:{h.line_start}\n'
                          f'Reasoning: {h.reasoning}\nTrace: {h.trace}\n\nCODE:\n{ctx}',
                          default={}) or {}
-            if d.get('refuted') and d.get('line'):
+            raw_code = '\n'.join(l.split(' | ', 1)[1] if ' | ' in l else l for l in ctx.splitlines())
+            if critic_refutes(d, raw_code):
                 h.verdict, h.confidence, h.proof_level = 'uncertain', 'possible', 'L0'
-                s.summary(f"refuted: {str(d.get('why', ''))[:200]}")
+                s.summary(f"refuted by {d.get('control')}: {str(d.get('why', ''))[:180]}")
             else:
                 h.confidence = 'verified' if h.trace else 'likely'
                 s.summary('survived the critic')
