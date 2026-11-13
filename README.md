@@ -85,6 +85,19 @@ The PR comment and one-click suggested changes are posted with the runner's own
 | `anthropic` | Your Anthropic account                            |
 | `ollama`    | A model next to the agent (laptop / runner)       |
 
+## GitLab
+
+Copy [`templates/gitlab-ci.yml`](templates/gitlab-ci.yml) into your `.gitlab-ci.yml`
+and add two masked CI/CD variables: `T7_TOKEN` (from the portal) and
+`T7_GITLAB_TOKEN` (a project access token, scope `api`, role Reporter, so t7 can
+comment on the merge request with one-click suggestions). Works with
+self-managed GitLab — `CI_API_V4_URL` is picked up automatically.
+
+## Any other CI (Bitbucket, Azure DevOps, Jenkins …)
+
+See [`templates/generic-ci.sh`](templates/generic-ci.sh): `t7 scan --ci` exits
+non-zero when an enforced merge gate blocks, and writes `t7-report.md`.
+
 ## How a review runs
 
 `planner` picks the chain for this diff → `mapper` builds the abstract

@@ -70,6 +70,7 @@ def _gh(method, url, token, body=None):
 
 
 def github_context():
+    """GitHub Actions pull_request context, or None."""
     token, repo = os.environ.get('GITHUB_TOKEN'), os.environ.get('GITHUB_REPOSITORY')
     event_path = os.environ.get('GITHUB_EVENT_PATH')
     if not (token and repo and event_path and Path(event_path).exists()):
@@ -78,7 +79,8 @@ def github_context():
     pr = event.get('pull_request')
     if not pr:
         return None
-    return {'token': token, 'repo': repo, 'number': pr['number'], 'head_sha': pr['head']['sha'],
+    return {'kind': 'github', 'token': token, 'repo': repo, 'number': pr['number'],
+            'head_sha': pr['head']['sha'], 'base_sha': pr['base']['sha'],
             'title': pr.get('title', ''), 'url': pr.get('html_url', ''),
             'author': (pr.get('user') or {}).get('login', ''),
             'api': os.environ.get('GITHUB_API_URL', 'https://api.github.com')}
@@ -139,3 +141,86 @@ def _locate(ctx, edit):
         return None
     start = text.count('\n', 0, i) + 1
     return start, start + edit['find'].count('\n')
+
+
+# ─── GitLab (merge requests) ────────────────────────────────────────────────
+# GitLab's CI_JOB_TOKEN cannot write MR notes, so the customer adds a project
+# access token (scope `api`, role Reporter+) as the masked variable T7_GITLAB_TOKEN.
+# It stays in their CI; Byteramp never sees it.
+
+def gitlab_context():
+    env = os.environ
+    if not (env.get('GITLAB_CI') and env.get('CI_MERGE_REQUEST_IID')):
+        return None
+    return {'kind': 'gitlab', 'token': env.get('T7_GITLAB_TOKEN', ''),
+            'api': env.get('CI_API_V4_URL', 'https://gitlab.com/api/v4'),
+            'project': env.get('CI_PROJECT_ID'), 'number': int(env['CI_MERGE_REQUEST_IID']),
+            'title': env.get('CI_MERGE_REQUEST_TITLE', ''),
+            'url': f"{env.get('CI_MERGE_REQUEST_PROJECT_URL', env.get('CI_PROJECT_URL', ''))}"
+                   f"/-/merge_requests/{env['CI_MERGE_REQUEST_IID']}",
+            'author': env.get('GITLAB_USER_LOGIN', ''),
+            'base_sha': env.get('CI_MERGE_REQUEST_DIFF_BASE_SHA', ''),
+            'head_sha': env.get('CI_COMMIT_SHA', '')}
+
+
+def _gl(method, url, token, body=None):
+    req = urllib.request.Request(url, method=method, data=json.dumps(body).encode() if body else None,
+                                 headers={'PRIVATE-TOKEN': token, 'Content-Type': 'application/json'})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        raw = r.read()
+        return json.loads(raw) if raw else {}
+
+
+def post_mr(ctx, summary_md, surfaced, sec_ids, tracer):
+    with tracer.step('reporter', 'Publish MR summary and suggestions') as s:
+        if not ctx['token']:
+            print(summary_md)  # visible in the job log
+            s.skip('no T7_GITLAB_TOKEN — summary printed to the job log only')
+            return
+        base = f"{ctx['api']}/projects/{ctx['project']}/merge_requests/{ctx['number']}"
+        body = f'{MARKER}\n{summary_md}'
+        notes = _gl('GET', f'{base}/notes?per_page=100&sort=desc', ctx['token'])
+        mine = next((n for n in notes if MARKER in (n.get('body') or '')), None)
+        if mine:
+            _gl('PUT', f"{base}/notes/{mine['id']}", ctx['token'], {'body': body})
+        else:
+            _gl('POST', f'{base}/notes', ctx['token'], {'body': body})
+        posted = 0
+        for h in surfaced:
+            if not (h.fix and h.fix.get('status') in ('verified', 'partial') and h.edits):
+                continue
+            sid = sec_ids.get(h.fingerprint, '')
+            for e in h.edits[:3]:
+                rng = _locate_in(os.environ.get('CI_PROJECT_DIR', '.'), e)
+                if not rng:
+                    continue
+                start, end = rng
+                badge = 'verified fix' if h.fix['status'] == 'verified' else 'partially verified fix'
+                try:
+                    _gl('POST', f'{base}/discussions', ctx['token'], {
+                        'body': (f"**{sid} · {h.title}** — {badge}\n\n{h.fix.get('explanation', '')}"
+                                 f"\n\n```suggestion:-0+{end - start}\n{e['replace']}\n```"),
+                        'position': {'position_type': 'text', 'base_sha': ctx['base_sha'],
+                                     'start_sha': ctx['base_sha'], 'head_sha': ctx['head_sha'],
+                                     'new_path': e['file'], 'new_line': start}})
+                    posted += 1
+                except Exception:  # noqa: BLE001 — line outside the MR diff
+                    pass
+        s.summary(f'summary posted, {posted} suggestion(s)')
+
+
+def _locate_in(root, edit):
+    try:
+        text = (Path(root) / edit['file']).read_text()
+    except OSError:
+        return None
+    i = text.find(edit['find'])
+    if i < 0:
+        return None
+    start = text.count('\n', 0, i) + 1
+    return start, start + edit['find'].count('\n')
+
+
+def write_ci_report(root, summary_md):
+    """Generic CI (Bitbucket, Azure DevOps, Jenkins …): a Markdown report to archive."""
+    (root / 't7-report.md').write_text(summary_md or 'Triple Seven: no report.')

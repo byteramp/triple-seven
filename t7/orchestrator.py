@@ -18,8 +18,8 @@ from .agents.fixer import Verifier, fix_one
 from .agents.mapper import map_architecture
 from .agents.planner import plan
 from .agents.prover import prove_one
-from .agents.reporter import (github_context, post_pr, select_for_pr, write_bundle,
-                              write_last_scan)
+from .agents.reporter import (github_context, gitlab_context, post_mr, post_pr, select_for_pr,
+                              write_bundle, write_ci_report, write_last_scan)
 from .agents.triage import TRIAGE_SYSTEM, _context, triage_all
 from .api import APIError, Byteramp
 from .config import Config
@@ -64,9 +64,9 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
     cfg = Config.load(root)
     api = Byteramp(cfg)
     llm = LLM(cfg, api)
-    gh = github_context() if ci else None
+    gh = (github_context() or gitlab_context()) if ci else None
 
-    base_sha = gitops.resolve_base(root, base)
+    base_sha = gitops.resolve_base(root, base or (gh or {}).get('base_sha') or None)
     head = gitops.head_sha(root)
     changed = gitops.changed_files(root, base_sha, include_worktree=not ci, ignore=cfg.ignore_paths)
     profile = detect(root, cfg)
@@ -175,10 +175,13 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                        'steps': len(tracer.steps)})}
             if gh and result.get('summary_markdown'):
                 try:
-                    post_pr(gh, result['summary_markdown'], result.get('surfaced', []), sec_ids, tracer)
+                    poster = post_pr if gh['kind'] == 'github' else post_mr
+                    poster(gh, result['summary_markdown'], result.get('surfaced', []), sec_ids, tracer)
                 except Exception as e:  # noqa: BLE001
-                    print(f't7: could not post to the PR: {e}', file=sys.stderr)
+                    print(f't7: could not post to the pull/merge request: {e}', file=sys.stderr)
                 tracer.flush()
+            elif ci:
+                write_ci_report(root, result.get('summary_markdown'))
     except Exception as e:  # noqa: BLE001
         tracer.flush()
         if run_id:

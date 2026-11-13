@@ -1,0 +1,25 @@
+# Triple Seven for GitLab — add to your .gitlab-ci.yml (or `include:` this file).
+#
+# CI/CD variables (Settings → CI/CD → Variables, masked + protected as you prefer):
+#   T7_TOKEN         repository token from the Triple Seven portal
+#   T7_GITLAB_TOKEN  project access token, scope `api`, role Reporter — lets t7 comment on
+#                    the merge request. Stays in your GitLab; Byteramp never sees it.
+# Optional: T7_LLM / T7_LLM_MODEL / T7_LLM_BASE_URL / T7_LLM_API_KEY for your own model.
+
+triple-seven:
+  stage: test
+  image: python:3.12-slim
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  variables:
+    GIT_DEPTH: "0"            # t7 needs the merge base
+    T7_API_URL: "https://api.byteramp.se/api"
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq git >/dev/null
+    - pip install --quiet "t7-agent==0.1.0"
+  script:
+    - t7 scan --ci
+  artifacts:
+    when: always
+    paths: [t7-report.md]
+    expire_in: 30 days

@@ -184,3 +184,34 @@ def test_django_no_tests_with_nonzero_exit_is_skip(tmp_path):
     assert _check(cmd, tmp_path, 30)[0] == 'skip'
     fail = f'{sys.executable} -c "import sys; print(\'FAILED (failures=1)\'); sys.exit(1)"'
     assert _check(fail, tmp_path, 30)[0] == 'fail'
+
+
+def test_gitlab_mr_context_and_note(monkeypatch, tmp_path):
+    from t7.agents import Hypothesis
+    from t7.agents import reporter
+    from t7.trace import Tracer
+    monkeypatch.setenv('GITLAB_CI', 'true')
+    monkeypatch.setenv('CI_MERGE_REQUEST_IID', '42')
+    monkeypatch.setenv('CI_PROJECT_ID', '7')
+    monkeypatch.setenv('CI_API_V4_URL', 'https://gitlab.example.com/api/v4')
+    monkeypatch.setenv('CI_MERGE_REQUEST_DIFF_BASE_SHA', 'b' * 40)
+    monkeypatch.setenv('CI_COMMIT_SHA', 'h' * 40)
+    monkeypatch.setenv('T7_GITLAB_TOKEN', 'glpat-test')
+    monkeypatch.setenv('CI_PROJECT_DIR', str(tmp_path))
+    (tmp_path / 'app.py').write_text('a = 1\nrows = q(f"{x}")\nb = 2\n')
+    ctx = reporter.gitlab_context()
+    assert ctx['kind'] == 'gitlab' and ctx['number'] == 42
+    calls = []
+
+    def fake_gl(method, url, token, body=None):
+        calls.append((method, url, body))
+        return [] if method == 'GET' else {}
+    monkeypatch.setattr(reporter, '_gl', fake_gl)
+    h = Hypothesis('fp', 'SQLi', 'high', file_path='app.py', line_start=2)
+    h.fix = {'status': 'verified', 'explanation': 'bind it'}
+    h.edits = [{'file': 'app.py', 'find': 'rows = q(f"{x}")', 'replace': 'rows = q("?", (x,))'}]
+    reporter.post_mr(ctx, '### summary', [h], {'fp': 'SEC-REQ-APP-001'}, Tracer(quiet=True))
+    assert calls[1][0] == 'POST' and calls[1][1].endswith('/merge_requests/42/notes')
+    disc = calls[2]
+    assert disc[1].endswith('/discussions') and disc[2]['position']['new_line'] == 2
+    assert '```suggestion:-0+0' in disc[2]['body']

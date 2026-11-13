@@ -47,9 +47,11 @@ def repo_root(start='.'):
 
 def resolve_base(root, base=None):
     candidates = [base] if base else []
-    env_base = os.environ.get('GITHUB_BASE_REF')
-    if env_base:
-        candidates.append(f'origin/{env_base}')
+    for var in ('GITHUB_BASE_REF', 'CI_MERGE_REQUEST_TARGET_BRANCH_NAME',
+                'BITBUCKET_PR_DESTINATION_BRANCH', 'SYSTEM_PULLREQUEST_TARGETBRANCH'):
+        env_base = os.environ.get(var, '').replace('refs/heads/', '')
+        if env_base:
+            candidates.append(f'origin/{env_base}')
     candidates += ['origin/main', 'origin/master', 'main', 'master']
     for c in candidates:
         if c and run(['git', 'rev-parse', '--verify', '--quiet', c], root).returncode == 0:
