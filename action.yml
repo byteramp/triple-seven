@@ -1,0 +1,51 @@
+name: Triple Seven
+description: >
+  Threat model, verified fixes and proof for every pull request.
+  Runs entirely in your runner — your source code never leaves your environment.
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  token:
+    description: Triple Seven repository token (store as secret T7_TOKEN)
+    required: true
+  api-url:
+    description: Byteramp API URL
+    default: https://api.byteramp.se/api
+  llm:
+    description: byteramp (opt-in, Byteramp EU VPS models) | azure | openai | anthropic | ollama
+    default: byteramp
+  llm-model:
+    description: Model / deployment name for your own provider
+    default: ''
+  llm-base-url:
+    description: Base URL for azure / openai-compatible / ollama
+    default: ''
+  llm-api-key:
+    description: Key for your own provider (stays in your runner)
+    default: ''
+  fix:
+    description: Generate and verify fixes
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install t7
+      shell: bash
+      run: pip install --quiet "${{ github.action_path }}"
+    - name: Triple Seven review
+      shell: bash
+      env:
+        T7_TOKEN: ${{ inputs.token }}
+        T7_API_URL: ${{ inputs.api-url }}
+        T7_LLM: ${{ inputs.llm }}
+        T7_LLM_MODEL: ${{ inputs.llm-model }}
+        T7_LLM_BASE_URL: ${{ inputs.llm-base-url }}
+        T7_LLM_API_KEY: ${{ inputs.llm-api-key }}
+        GITHUB_TOKEN: ${{ github.token }}
+      run: t7 scan --ci ${{ inputs.fix == 'true' && ' ' || '--no-fix' }}
