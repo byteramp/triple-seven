@@ -97,6 +97,13 @@ class LLM:
                                'num_ctx': int(os.environ.get('T7_NUM_CTX', '16384'))}}
         if json_mode:
             payload['format'] = 'json'
+        # Reasoning models (Qwen3/3.5, gpt-oss, DeepSeek-R1) otherwise spend the token budget
+        # thinking and return an empty answer. gpt-oss cannot turn thinking off, only down.
+        think = os.environ.get('T7_THINK', '').lower()
+        if 'gpt-oss' in (self.cfg.llm_model or ''):
+            payload['think'] = think if think in ('low', 'medium', 'high') else 'low'
+        else:
+            payload['think'] = think in ('1', 'true', 'yes')
         data = self._post(f'{base}/api/chat', {}, payload, timeout=900)
         return (data.get('message') or {}).get('content', '')
 
