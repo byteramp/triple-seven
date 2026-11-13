@@ -281,8 +281,12 @@ def test_rejection_memory_skips_model(repo, monkeypatch):
 def test_critic_needs_verbatim_control_quote():
     from t7.agents.triage import critic_refutes
     code = 'sort = ALLOWED_SORT.get(request.GET.get("sort"), "created_at")\nc.execute(f"... ORDER BY {sort}")'
-    assert critic_refutes({'refuted': True, 'control': 'allowlist',
-                           'quote': 'sort = ALLOWED_SORT.get(request.GET.get("sort"), "created_at")'}, code)
-    assert not critic_refutes({'refuted': True, 'control': 'validation', 'quote': 'validate(sort)'}, code)
-    assert not critic_refutes({'refuted': True, 'control': 'none', 'quote': 'c.execute(...)'}, code)
-    assert not critic_refutes({'refuted': True, 'line': 2}, code)
+    ok = {'verdict': 'blocked', 'control': 'allowlist',
+          'quote': 'sort = ALLOWED_SORT.get(request.GET.get("sort"), "created_at")'}
+    assert critic_refutes(ok, code, [2])
+    assert not critic_refutes({**ok, 'verdict': 'exploitable'}, code, [2])
+    assert not critic_refutes({**ok, 'control': 'other'}, code, [2])
+    assert not critic_refutes({**ok, 'quote': 'validate(sort)'}, code, [2])
+    # the vulnerable line itself is never the control (seen with small models)
+    assert not critic_refutes({'verdict': 'blocked', 'control': 'validation',
+                               'quote': 'c.execute(f"... ORDER BY {sort}")'}, code, [2])

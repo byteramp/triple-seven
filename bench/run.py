@@ -81,7 +81,10 @@ def triage(llm, t, c):
                                               f"Reasoning: {d.get('reasoning', '')}\n\nCODE:\n{code}", default={}))
         try:
             from t7.agents.triage import critic_refutes
-            refuted = critic_refutes(cr, c['code'])
+            try:
+                refuted = critic_refutes(cr, c['code'], [c['vuln']['line']] if c['vuln'] else [])
+            except TypeError:  # older signature
+                refuted = critic_refutes(cr, c['code'])
         except ImportError:  # baseline agent versions
             refuted = bool(cr.get('refuted') and cr.get('line'))
         if refuted:

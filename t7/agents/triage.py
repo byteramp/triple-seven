@@ -38,29 +38,41 @@ TRIAGE_SYSTEM = GROUND_RULES + (
 )
 
 CRITIC_SYSTEM = GROUND_RULES + (
-    "\nYou are an INDEPENDENT CRITIC. Another reviewer claims the finding below is exploitable. "
-    "Re-read the cited lines and check whether a concrete control in THIS code blocks the attack: "
-    "input validation or an allow-list, parameterisation, escaping, an authorization check or a "
-    "tenant-scoped query, the code being unreachable or test-only, or a static response with no data. "
-    "If such a control exists, quote the exact line of code that implements it. If the attack works "
-    "as described, say so — do not refute on speculation, on the attacker needing to be logged in, or "
-    "on controls you cannot see. Return JSON: {\"refuted\": bool, \"control\": "
-    "\"validation|allowlist|parameterised|escaping|authorization|unreachable|static|other|none\", "
-    "\"quote\": \"the exact blocking line, copied verbatim, or empty\", \"line\": int|null, "
-    "\"why\": 1-2 sentences}."
+    "\nYou are an INDEPENDENT CRITIC. Another reviewer says the finding below is exploitable. "
+    "Decide between two outcomes:\n"
+    "  exploitable — the attack works as described in this code;\n"
+    "  blocked — a separate line of code stops it: input validation, an allow-list, "
+    "parameterisation, escaping, an authorization check or tenant-scoped query, or the code is "
+    "unreachable / test-only / a static response with no data.\n"
+    "The vulnerable line itself is never the control. Being logged in is not a control. Controls you "
+    "cannot see in the code do not count. If unsure, answer exploitable.\n"
+    "Return JSON: {\"verdict\": \"exploitable\"|\"blocked\", \"control\": "
+    "\"validation|allowlist|parameterised|escaping|authorization|unreachable|static|none\", "
+    "\"quote\": \"the exact blocking line copied verbatim, or empty\", \"why\": 1-2 sentences}."
 )
 
+CONTROL_TYPES = {'validation', 'allowlist', 'parameterised', 'parameterized', 'escaping', 'authorization',
+                 'unreachable', 'static'}
 
-def critic_refutes(d, code_text):
-    """Accept a refutation only with a verbatim quote of the blocking control that really is in
-    the code and is not just the vulnerable line itself. Small models refute everything otherwise."""
-    if not isinstance(d, dict) or not d.get('refuted'):
+
+def critic_refutes(d, code_text, sink_lines=()):
+    """Accept a refutation only if the critic says 'blocked', names a real control type and
+    quotes it verbatim from the code — and the quote is not the vulnerable line itself.
+    (Small models otherwise invert the answer or cite the sink as the 'control'.)"""
+    if not isinstance(d, dict):
+        return False
+    blocked = str(d.get('verdict', '')).lower() == 'blocked' or (
+        'verdict' not in d and d.get('refuted') is True)
+    if not blocked or str(d.get('control', '')).lower() not in CONTROL_TYPES:
         return False
     quote = ' '.join(str(d.get('quote') or '').split())
-    if len(quote) < 8 or str(d.get('control', '')).lower() in ('', 'none'):
+    if len(quote) < 8 or quote not in ' '.join(code_text.split()):
         return False
-    flat = ' '.join(code_text.split())
-    return quote in flat
+    lines = code_text.splitlines()
+    for n in sink_lines:
+        if n and 1 <= n <= len(lines) and quote in ' '.join(lines[n - 1].split()):
+            return False
+    return True
 
 
 def _key(h):
@@ -96,6 +108,13 @@ def _context(root, h, changed):
     parts = [f'## {c.path}\n' + changed_region_listing(root, c, context=15, cap=4000)
              for c in changed if c.added][:8]
     return '\n\n'.join(parts)[:24000]
+
+
+def read_file(root, path):
+    try:
+        return (root / path).read_text(errors='replace')
+    except OSError:
+        return ''
 
 
 def region_hash(root, h):
@@ -167,7 +186,9 @@ def _critic_inner(h, root, changed, llm, tracer, fork):
                          f'Reasoning: {h.reasoning}\nTrace: {h.trace}\n\nCODE:\n{ctx}',
                          default={}) or {}
             raw_code = '\n'.join(l.split(' | ', 1)[1] if ' | ' in l else l for l in ctx.splitlines())
-            if critic_refutes(d, raw_code):
+            sink = range(h.line_start or 0, (h.line_end or h.line_start or 0) + 1) if h.line_start else ()
+            raw_file = read_file(root, h.file_path) if h.file_path else raw_code
+            if critic_refutes(d, raw_file or raw_code, sink):
                 h.verdict, h.confidence, h.proof_level = 'uncertain', 'possible', 'L0'
                 s.summary(f"refuted by {d.get('control')}: {str(d.get('why', ''))[:180]}")
             else:
