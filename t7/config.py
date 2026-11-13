@@ -2,7 +2,7 @@
 
 Env:
   T7_TOKEN          repository token from the Triple Seven portal (t7_…)
-  T7_API_URL        default https://api.byteramp.se/api
+  T7_API_URL        default https://t7.byteramp.se/api
   T7_LLM            byteramp | openai | azure | anthropic | ollama   (default byteramp)
   T7_LLM_MODEL      model / deployment name for BYO and local providers
   T7_LLM_BASE_URL   base URL for openai-compatible / azure / ollama
@@ -18,7 +18,7 @@ from pathlib import Path
 @dataclass
 class Config:
     token: str = ''
-    api_url: str = 'https://api.byteramp.se/api'
+    api_url: str = 'https://t7.byteramp.se/api'
     llm: str = 'byteramp'
     llm_model: str = ''
     llm_base_url: str = ''

@@ -24,20 +24,20 @@ pull request exists. Tools: `t7_scan`, `t7_findings`, `t7_explain`,
 
 ```bash
 # Claude Code (local scope — token stays out of the repo)
-claude mcp add triple-seven -e T7_TOKEN=t7_... -e T7_API_URL=https://api.byteramp.se/api -- t7 mcp
+claude mcp add triple-seven -e T7_TOKEN=t7_... -e T7_API_URL=https://t7.byteramp.se/api -- t7 mcp
 ```
 
 Cursor / Windsurf (`~/.cursor/mcp.json`, `~/.codeium/windsurf/mcp_config.json`):
 ```json
 { "mcpServers": { "triple-seven": { "command": "t7", "args": ["mcp"],
-  "env": { "T7_TOKEN": "t7_...", "T7_API_URL": "https://api.byteramp.se/api" } } } }
+  "env": { "T7_TOKEN": "t7_...", "T7_API_URL": "https://t7.byteramp.se/api" } } } }
 ```
 
 VS Code (`.vscode/mcp.json`, safe to commit — each developer is prompted for their token):
 ```json
 { "inputs": [{ "type": "promptString", "id": "t7-token", "description": "Triple Seven token", "password": true }],
   "servers": { "triple-seven": { "type": "stdio", "command": "t7", "args": ["mcp"],
-    "env": { "T7_TOKEN": "${input:t7-token}", "T7_API_URL": "https://api.byteramp.se/api" } } } }
+    "env": { "T7_TOKEN": "${input:t7-token}", "T7_API_URL": "https://t7.byteramp.se/api" } } } }
 ```
 
 Codex (`~/.codex/config.toml`):
@@ -45,7 +45,7 @@ Codex (`~/.codex/config.toml`):
 [mcp_servers.triple-seven]
 command = "t7"
 args = ["mcp"]
-env = { T7_TOKEN = "t7_...", T7_API_URL = "https://api.byteramp.se/api" }
+env = { T7_TOKEN = "t7_...", T7_API_URL = "https://t7.byteramp.se/api" }
 tool_timeout_sec = 900
 ```
 

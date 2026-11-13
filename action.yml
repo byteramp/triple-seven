@@ -12,7 +12,7 @@ inputs:
     required: true
   api-url:
     description: Byteramp API URL
-    default: https://api.byteramp.se/api
+    default: https://t7.byteramp.se/api
   llm:
     description: byteramp (opt-in, Byteramp EU VPS models) | azure | openai | anthropic | ollama
     default: byteramp

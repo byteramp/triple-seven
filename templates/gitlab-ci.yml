@@ -13,7 +13,7 @@ triple-seven:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   variables:
     GIT_DEPTH: "0"            # t7 needs the merge base
-    T7_API_URL: "https://api.byteramp.se/api"
+    T7_API_URL: "https://t7.byteramp.se/api"
   before_script:
     - apt-get update -qq && apt-get install -y -qq git >/dev/null
     - pip install --quiet "t7-agent==0.1.0"
