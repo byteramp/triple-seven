@@ -91,7 +91,7 @@ jobs:
           python -m pip --python /tmp/sbom-env/bin/python install dist/*.whl
           python -m pip install cyclonedx-bom==5.1.1
           cyclonedx-py environment /tmp/sbom-env/bin/python \
-            --of JSON --output-reproducible -o dist/t7-agent.cdx.json
+            --of JSON -o dist/t7-agent.cdx.json   # keep serialNumber: attest-sbom requires it
 
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS
