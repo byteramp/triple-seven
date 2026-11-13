@@ -76,11 +76,29 @@ class LLM:
             r = self.api.llm(purpose, system, prompt, json_mode, max_tokens, temperature)
             self.model = r.get('model') or self.model
             return r.get('text', '')
-        if p in ('openai', 'azure', 'ollama'):
+        if p == 'ollama':
+            return self._ollama(system, prompt, json_mode, max_tokens, temperature)
+        if p in ('openai', 'azure'):
             return self._openai_compat(system, prompt, json_mode, max_tokens, temperature)
         if p == 'anthropic':
             return self._anthropic(system, prompt, max_tokens, temperature)
         raise LLMError(f'unknown provider {p}')
+
+    def _ollama(self, system, prompt, json_mode, max_tokens, temperature):
+        """Native Ollama API: the OpenAI-compatible endpoint cannot set num_ctx, so long
+        prompts would be silently truncated to the model's small default window."""
+        import os
+        base = (self.cfg.llm_base_url or 'http://localhost:11434').rstrip('/')
+        base = base[:-3] if base.endswith('/v1') else base
+        payload = {'model': self.cfg.llm_model, 'stream': False,
+                   'messages': [{'role': 'system', 'content': system or ''},
+                                {'role': 'user', 'content': prompt}],
+                   'options': {'temperature': temperature, 'num_predict': max_tokens,
+                               'num_ctx': int(os.environ.get('T7_NUM_CTX', '16384'))}}
+        if json_mode:
+            payload['format'] = 'json'
+        data = self._post(f'{base}/api/chat', {}, payload, timeout=900)
+        return (data.get('message') or {}).get('content', '')
 
     def _post(self, url, headers, payload, timeout=240):
         req = urllib.request.Request(url, data=json.dumps(payload).encode(), method='POST',
