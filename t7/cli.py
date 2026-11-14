@@ -34,6 +34,8 @@ def _print_human(res):
         print(f"\n✓ {len(res['resolved'])} earlier SEC-REQ(s) resolved by this change.")
     if res.get('run_id'):
         print(f"\nDetails: portal → Triple Seven → Runs ({res['run_id']})")
+    else:
+        print('\n⚠ Not connected (no T7_TOKEN): this review ran locally only and is not in the portal.')
 
 
 def cmd_scan(a):

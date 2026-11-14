@@ -246,10 +246,11 @@ def tool_scan(args):
                         fix=args.get('fix', True), quiet=True, client='mcp')
     if res.get('no_changes'):
         return _text('Nothing changed compared with the base branch. Call t7_scan with all=true to '
-                     'review the whole repository.')
+                     'review the whole repository.' + ('' if res.get('run_id') else "\n\n⚠ NOT CONNECTED: T7_TOKEN is not set in the MCP server's environment, so this review ran locally only and was NOT recorded in the Triple Seven portal. Add T7_TOKEN (and T7_API_URL) to the server's \"env\" in mcp.json and restart the server."))
     root = _root()
-    return _text(_fmt_findings(_last(root)) + (
-        f"\nPortal run: {res.get('run_id')}" if res.get('run_id') else ''))
+    note = (f"\nPortal run: {res.get('run_id')}" if res.get('run_id') else
+            "\n\n⚠ NOT CONNECTED: T7_TOKEN is not set in the MCP server's environment, so this review ran locally only and was NOT recorded in the Triple Seven portal. Add T7_TOKEN (and T7_API_URL) to the server's \"env\" in mcp.json and restart the server.")
+    return _text(_fmt_findings(_last(root)) + note)
 
 
 def tool_findings(args):
