@@ -413,13 +413,15 @@ def test_setup_verifies_before_storing(repo, monkeypatch, capsys):
     def deny(self):
         raise APIError(401, 'Invalid token')
     monkeypatch.setattr(Byteramp, 'config', deny)
-    assert cli.cmd_setup(type('A', (), {'default': False, 'api_url': None})()) == 1
-    assert credentials.lookup(repo) is None
+    args = type('A', (), {'default': False, 'api_url': None, 'token': True, 'no_editors': True, 'yes': False})()
+    assert cli.cmd_setup(args) == 1
+    assert credentials.lookup(repo) == (None, None)
     monkeypatch.setattr(cli, '_read_token', lambda: 't7_good')
     monkeypatch.setattr(Byteramp, 'config', lambda self: {'repository': {'full_name': 'acme/app'},
-                                                          'llm': {'byteramp_allowed': True}})
-    assert cli.cmd_setup(type('A', (), {'default': False, 'api_url': None})()) == 0
-    assert credentials.lookup(repo)['token'] == 't7_good'
+                                                          'llm': {'byteramp_allowed': True},
+                                                          'token': {'kind': 'developer', 'expires_at': None}})
+    assert cli.cmd_setup(args) == 0
+    assert credentials.lookup(repo)[1]['token'] == 't7_good'
     assert 'acme/app' in capsys.readouterr().out
 
 
@@ -427,8 +429,88 @@ def test_doctor_and_welcome_outside_git(tmp_path, monkeypatch, capsys):
     import pytest
     from t7 import cli
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr('t7.editors.detect', lambda: [])
     assert cli.cmd_doctor(None) == 1
     assert 'not inside a git repository' in capsys.readouterr().out
     with pytest.raises(SystemExit) as e:
         cli.main([])
     assert e.value.code == 0 and 't7 setup' in capsys.readouterr().out
+
+
+def test_browser_sign_in_stores_token_and_registers_editors(repo, monkeypatch, capsys):
+    from t7 import cli, credentials
+    from t7.api import Byteramp
+    calls = []
+
+    def fake_public(api_url, path, body, timeout=30):
+        calls.append(path)
+        if path == 'device/':
+            assert body['repo_hint']                       # git remote or folder name, never code
+            return {'device_code': 'dev', 'user_code': 'BCDF-GHJK', 'interval': 0, 'expires_in': 60,
+                    'verification_uri_complete': 'https://app.example/t7-device?code=BCDF-GHJK'}
+        if calls.count('device/poll/') < 2:
+            return {'status': 'pending'}
+        return {'status': 'approved', 'token': 't7_fromdevice', 'api_url': 'https://t7.example/api',
+                'repository': 'acme/app', 'email': 'dev@acme.io', 'kind': 'developer',
+                'expires_at': '2099-01-01T00:00:00Z'}
+    monkeypatch.setattr(Byteramp, 'public', staticmethod(fake_public))
+    monkeypatch.setattr('time.sleep', lambda s: None)
+    registered = []
+    monkeypatch.setattr('t7.editors.detect', lambda: [('VS Code', lambda: registered.append(1) or ('VS Code', 'added', 'x'))])
+    args = type('A', (), {'default': False, 'api_url': None, 'token': False, 'no_editors': False, 'yes': True})()
+    assert cli.cmd_setup(args) == 0
+    key, entry = credentials.lookup(repo)
+    assert entry['token'] == 't7_fromdevice' and entry['api_url'] == 'https://t7.byteramp.se/api'
+    assert registered == [1]
+    out = capsys.readouterr().out
+    assert 'BCDF-GHJK' in out and 'acme/app' in out and 't7_fromdevice' not in out
+
+
+def test_developer_token_renews_itself_when_close_to_expiry(repo, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from t7 import access, credentials
+    from t7.api import Byteramp
+    from t7.config import Config
+    soon = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+    credentials.store('t7_old', 'https://t7.example/api', 'acme/app', repo, expires_at=soon, kind='developer')
+    cfg = Config.load(repo)
+    monkeypatch.setattr(Byteramp, 'rotate', lambda self: {'token': 't7_new', 'expires_at': '2099-01-01T00:00:00Z'})
+    assert access.renew_if_due(cfg, Byteramp(cfg))
+    assert cfg.token == 't7_new' and credentials.lookup(repo)[1]['token'] == 't7_new'
+    # Far from expiry, or a T7_TOKEN from the environment: nothing happens.
+    assert not access.renew_if_due(Config.load(repo), Byteramp(cfg))
+    monkeypatch.setenv('T7_TOKEN', 't7_ci')
+    assert not access.renew_if_due(Config.load(repo), Byteramp(cfg))
+
+
+def test_editor_registration_merges_and_is_idempotent(tmp_path, monkeypatch):
+    import json
+    from t7 import editors
+    monkeypatch.setattr(editors, '_home', lambda: tmp_path)
+    monkeypatch.setattr(editors, '_vscode_user_dirs', lambda: [('VS Code', tmp_path / 'Code' / 'User')])
+    monkeypatch.setattr(editors.shutil, 'which', lambda name: '/usr/local/bin/t7' if name == 't7' else None)
+    (tmp_path / 'Code' / 'User').mkdir(parents=True)
+    (tmp_path / 'Code' / 'User' / 'mcp.json').write_text(json.dumps({'servers': {'other': {'command': 'x'}}}))
+    (tmp_path / '.cursor').mkdir()
+    (tmp_path / '.codex').mkdir()
+    first = {label: state for label, state, _ in editors.register()}
+    assert first == {'VS Code': 'added', 'Cursor': 'added', 'Codex': 'added'}
+    vs = json.loads((tmp_path / 'Code' / 'User' / 'mcp.json').read_text())
+    assert vs['servers']['other'] == {'command': 'x'}                       # kept
+    assert vs['servers']['triple-seven'] == {'type': 'stdio', 'command': '/usr/local/bin/t7', 'args': ['mcp']}
+    assert 'T7_TOKEN' not in (tmp_path / '.cursor' / 'mcp.json').read_text()
+    second = {label: state for label, state, _ in editors.register()}
+    assert set(second.values()) == {'ok'}
+    assert (tmp_path / '.codex' / 'config.toml').read_text().count('[mcp_servers.triple-seven]') == 1
+    # JSON with comments is never rewritten.
+    (tmp_path / '.cursor' / 'mcp.json').write_text('{ // mine\n "mcpServers": {} }')
+    assert dict((l, s) for l, s, _ in editors.register())['Cursor'] == 'manual'
+
+
+def test_mcp_scan_without_git_repo_asks_for_repo_path(tmp_path, monkeypatch):
+    from t7 import mcp
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv('T7_REPO', raising=False)
+    r = mcp.handle({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                    'params': {'name': 't7_scan', 'arguments': {}}})
+    assert r['result']['isError'] and 'repo_path' in r['result']['content'][0]['text']

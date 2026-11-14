@@ -5,61 +5,81 @@ developer's machine and in your CI. **Your source code never leaves your
 environment**: Byteramp only receives an abstract architecture model and
 finding metadata (title, file:line, fix/proof results as hashes and pass/fail).
 
-## Install
+## Get started (developer machine)
+
+```bash
+cd path/to/your-repository
+curl -fsSL https://raw.githubusercontent.com/byteramp/triple-seven/main/install.sh | sh
+```
+
+or, if you prefer to install it yourself:
 
 ```bash
 pipx install t7-agent                  # stdlib only, no third-party dependencies
-cd your-repo
-t7 setup                               # paste your token (hidden); verified, then stored for this repo
+cd path/to/your-repository
+t7 setup
+```
+
+`t7 setup` does everything once:
+
+1. **Signs you in through the browser.** It shows a code and opens the portal;
+   approve it there (portal login), or enter the code on the invitation e-mail
+   your team sent you. No token to copy.
+2. **Stores a personal token for this repository** in
+   `~/.config/t7/credentials.json` (mode 0600). It is valid for 90 days and
+   **renews itself** while your organization's subscription is active.
+3. **Adds Triple Seven to your editors / AI assistants** — VS Code (GitHub
+   Copilot agent mode), Cursor, Windsurf, Claude Code, Codex — user-wide, so it
+   works in every repository. No token is written into any editor config.
+
+Then:
+
+```bash
 t7 scan                                # review your current branch + uncommitted work
 t7 fix SEC-REQ-SHOP-004                # apply a verified fix and its regression test
 ```
 
-An active Triple Seven subscription and a repository token (portal → Triple Seven →
-Repositories) are required for every review — in the terminal, in your IDE and in
-CI. `t7 setup` checks the token against Byteramp before saving it to
-`~/.config/t7/credentials.json` (mode 0600), keyed by the repository path. In CI,
-set `T7_TOKEN` instead; it always takes precedence. `t7 logout` removes a stored token.
+…or ask your assistant: *"review my change with Triple Seven"*.
+
+Every other repository: `cd` into it and run `t7 setup` again (one click in the
+browser). An active Triple Seven subscription is required for every review — in
+the terminal, the IDE and CI.
+
+| Command | |
+|---|---|
+| `t7` | welcome and next step |
+| `t7 setup` | connect this repository (browser sign-in) and your editors; `--token` to paste a token instead |
+| `t7 editors` | add Triple Seven to the editors on this machine; `--show` prints the configs |
+| `t7 status` | repositories connected on this machine and token lifetime |
+| `t7 doctor` | check access, model, tests, editors |
+| `t7 scan [--all]` | review the change (or the whole repository) |
+| `t7 list` / `t7 fix ID` | fixes from the last scan / apply one |
+| `t7 logout` | remove the stored token for this repository |
 
 ## In your editor / AI assistant (MCP)
 
-`t7 mcp` is a Model Context Protocol server. Your assistant can then review the
-change you're working on, explain findings and apply verified fixes — before a
-pull request exists. Tools: `t7_scan`, `t7_findings`, `t7_explain`,
-`t7_show_fix`, `t7_apply_fix`, `t7_doctor`.
+`t7 setup` registers `t7 mcp` (a Model Context Protocol server) for you. Tools:
+`t7_scan`, `t7_findings`, `t7_explain`, `t7_show_fix`, `t7_apply_fix`,
+`t7_doctor`. The server finds the open workspace itself (or the assistant
+passes `repo_path`).
 
-Run `t7 setup` once in the repository and the MCP server uses that token — no
-token in any editor config. (Setting `T7_TOKEN` in the server's `env` still works
-and wins.)
+- **VS Code + GitHub Copilot:** Copilot Chat → **Agent** mode → ask. The
+  analysis runs on *your Copilot model* via MCP sampling (VS Code asks once to
+  allow it). Set `T7_LLM` to use another model.
+- **Claude Code / Cursor / Windsurf / Codex:** ask in chat. These clients do not
+  offer sampling: the analysis uses Byteramp models (after your administrator's
+  opt-in) or the provider you set with `T7_LLM`.
 
-```bash
-# Claude Code
-claude mcp add triple-seven -- t7 mcp
-```
+Manual configuration (if you skipped it): `t7 editors --show`.
 
-Cursor / Windsurf (`~/.cursor/mcp.json`, `~/.codeium/windsurf/mcp_config.json`):
-```json
-{ "mcpServers": { "triple-seven": { "command": "t7", "args": ["mcp"] } } }
-```
+## Token lifetime
 
-VS Code (`.vscode/mcp.json`, safe to commit — it holds no token).
-With GitHub Copilot in **Agent** mode the analysis runs on **your Copilot model** via MCP
-sampling (VS Code asks once to allow it) — no separate AI setup. Set `T7_LLM` to override:
-```json
-{ "servers": { "triple-seven": { "type": "stdio", "command": "t7", "args": ["mcp"],
-    "env": { "T7_REPO": "${workspaceFolder}" } } } }
-```
+| Token | Lifetime | Renewal |
+|---|---|---|
+| Developer (`t7 setup`) | 90 days | automatic, by `t7`, while the subscription is active |
+| CI (`T7_TOKEN` secret) | 1 year | portal → Repositories → Renew; the portal warns 30 days ahead |
 
-Codex (`~/.codex/config.toml`):
-```toml
-[mcp_servers.triple-seven]
-command = "t7"
-args = ["mcp"]
-tool_timeout_sec = 900
-```
-
-Give each developer a personal token (portal → Repositories → *Install for your
-team*) so runs are attributed and one person can be revoked on their own.
+An expired or revoked developer token: run `t7 setup` again.
 
 ## GitHub Actions
 

@@ -1,9 +1,10 @@
 """Stored repository tokens (`t7 setup`).
 
-Tokens are repository-scoped, so they are stored per local repository path,
-plus an optional default for use outside a repository. The file is created
-with 0600 permissions under the user's config directory. Precedence when
-running: T7_TOKEN env var  >  token stored for this repository  >  default.
+Tokens are repository-scoped, so they are stored per local repository path
+(plus an optional default, `t7 setup --default`). The file lives under the
+user's config directory with 0600 permissions. Precedence when running:
+T7_TOKEN env var  >  token stored for this repository  >  stored default.
+Developer tokens renew themselves here (see access.renew_if_due).
 """
 import json
 import os
@@ -33,30 +34,56 @@ def _save(data):
     os.replace(tmp, p)
 
 
-def store(token, api_url, repository, repo_root=None):
+def key_for(repo_root):
+    return str(Path(repo_root).resolve()) if repo_root else None
+
+
+def store(token, api_url, repository, repo_root=None, expires_at=None, kind='developer', email=''):
     data = _load()
-    entry = {'token': token, 'api_url': api_url, 'repository': repository}
+    entry = {'token': token, 'api_url': api_url, 'repository': repository,
+             'expires_at': expires_at, 'kind': kind, 'email': email}
     if repo_root:
-        data.setdefault('repos', {})[str(Path(repo_root).resolve())] = entry
+        data.setdefault('repos', {})[key_for(repo_root)] = entry
     else:
         data['default'] = entry
     _save(data)
 
 
+def update(key, **fields):
+    """Update the entry stored under `key` (a repo path, or None for the default)."""
+    data = _load()
+    entry = (data.get('repos') or {}).get(key) if key else data.get('default')
+    if entry is None:
+        return
+    entry.update({k: v for k, v in fields.items() if v is not None})
+    _save(data)
+
+
 def lookup(repo_root=None):
-    """The stored entry for this repository (or the default), or None."""
+    """(key, entry) stored for this repository, else the default, else (None, None)."""
     data = _load()
     if repo_root:
-        hit = (data.get('repos') or {}).get(str(Path(repo_root).resolve()))
+        k = key_for(repo_root)
+        hit = (data.get('repos') or {}).get(k)
         if hit:
-            return hit
-    return data.get('default')
+            return k, hit
+    if data.get('default'):
+        return None, data['default']
+    return None, None
+
+
+def entries():
+    data = _load()
+    out = [(k, v) for k, v in (data.get('repos') or {}).items()]
+    if data.get('default'):
+        out.append(('(default)', data['default']))
+    return out
 
 
 def remove(repo_root=None):
     data = _load()
     if repo_root:
-        (data.get('repos') or {}).pop(str(Path(repo_root).resolve()), None)
+        (data.get('repos') or {}).pop(key_for(repo_root), None)
     else:
         data.pop('default', None)
     _save(data)

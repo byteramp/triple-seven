@@ -24,7 +24,7 @@ from .agents.triage import TRIAGE_SYSTEM, _context, triage_all
 from .ci import ZERO, merges, push_context, set_github_status
 from .codeowners import CodeOwners
 from .api import APIError, Byteramp
-from .access import AccessError, NOT_CONNECTED, REJECTED, UNREACHABLE, offline_allowed
+from .access import AccessError, NOT_CONNECTED, REJECTED, UNREACHABLE, offline_allowed, renew_if_due
 from .config import Config
 from .context import detect
 from .llm import LLM
@@ -82,6 +82,7 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
     if cfg.offline and not offline_allowed():
         raise AccessError(NOT_CONNECTED)
     if not cfg.offline:
+        renew_if_due(cfg, api)
         try:
             r = api.start_run(trigger='pull_request' if gh else ('push' if push or ci else 'local'),
                               ref=os.environ.get('GITHUB_HEAD_REF') or gitops.current_branch(root),
@@ -93,6 +94,12 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                               client=client or ('action' if ci else 'cli'))
             run_id, policy = r['run_id'], r
         except APIError as e:
+            if e.status == 401 and cfg.token_source == 'setup':
+                # Another t7 process may just have renewed the stored token.
+                fresh = Config.load(root)
+                if fresh.token and fresh.token != cfg.token:
+                    cfg.token = fresh.token
+                    return scan_repo(base=base, fix=fix, ci=ci, quiet=quiet, enrich=enrich, client=client)
             if e.status in (401, 402, 403):
                 raise AccessError(REJECTED.format(detail=e.detail or e.status)) from None
             raise AccessError(UNREACHABLE.format(url=cfg.api_url, detail=e.detail or e.status)) from None

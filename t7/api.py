@@ -47,6 +47,30 @@ class Byteramp:
         except urllib.error.URLError as e:
             raise APIError(0, str(e.reason)) from None
 
+    @staticmethod
+    def public(api_url, path, body, timeout=30):
+        """Unauthenticated agent call (browser sign-in)."""
+        req = urllib.request.Request(
+            f'{api_url.rstrip("/")}/tripleseven/agent/{path}', data=json.dumps(body).encode(),
+            method='POST', headers={'Content-Type': 'application/json',
+                                    'User-Agent': f't7-agent/{__version__}'})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read() or b'{}')
+        except urllib.error.HTTPError as e:
+            try:
+                body = json.loads(e.read())
+            except Exception:  # noqa: BLE001
+                body = {}
+            if e.code == 404 and body.get('status'):
+                return body
+            raise APIError(e.code, body.get('detail') or e.reason) from None
+        except urllib.error.URLError as e:
+            raise APIError(0, str(e.reason)) from None
+
+    def rotate(self):
+        return self._req('POST', 'token/rotate/', {})
+
     def config(self):
         return self._req('GET', 'config/')
 

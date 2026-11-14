@@ -44,6 +44,7 @@ TOOLS = [
                 'base': {'type': 'string', 'description': 'Base ref (default: merge-base with origin/main)'},
                 'all': {'type': 'boolean', 'description': 'Review the whole repository instead of the change'},
                 'fix': {'type': 'boolean', 'description': 'Generate and verify fixes (default true)'},
+                'repo_path': {'type': 'string', 'description': 'Absolute path of the repository / workspace root. Pass it when the server may not see your workspace.'},
             },
         },
         'annotations': {'readOnlyHint': True, 'openWorldHint': True},
@@ -52,7 +53,7 @@ TOOLS = [
         'name': 't7_findings',
         'title': 'Triple Seven: findings from the last scan',
         'description': 'List the findings, proof levels and fix status from the most recent t7 scan.',
-        'inputSchema': {'type': 'object', 'properties': {}},
+        'inputSchema': {'type': 'object', 'properties': {'repo_path': {'type': 'string'}}},
         'annotations': {'readOnlyHint': True},
     },
     {
@@ -60,7 +61,8 @@ TOOLS = [
         'title': 'Triple Seven: explain a finding',
         'description': 'Explain one finding: why it matters, the attack, the code trace, proof and fix checks.',
         'inputSchema': {'type': 'object', 'required': ['id'],
-                        'properties': {'id': {'type': 'string', 'description': 'SEC-REQ id or fingerprint prefix'}}},
+                        'properties': {'id': {'type': 'string', 'description': 'SEC-REQ id or fingerprint prefix'},
+                                       'repo_path': {'type': 'string'}}},
         'annotations': {'readOnlyHint': True},
     },
     {
@@ -68,7 +70,7 @@ TOOLS = [
         'title': 'Triple Seven: show the verified fix',
         'description': 'Return the verified patch (unified diff, incl. regression test) for a finding.',
         'inputSchema': {'type': 'object', 'required': ['id'],
-                        'properties': {'id': {'type': 'string'}}},
+                        'properties': {'id': {'type': 'string'}, 'repo_path': {'type': 'string'}}},
         'annotations': {'readOnlyHint': True},
     },
     {
@@ -77,14 +79,14 @@ TOOLS = [
         'description': 'Apply the verified fix (and its regression test) to the working tree. '
                        'Does not commit. Review with git diff afterwards.',
         'inputSchema': {'type': 'object', 'required': ['id'],
-                        'properties': {'id': {'type': 'string'}}},
+                        'properties': {'id': {'type': 'string'}, 'repo_path': {'type': 'string'}}},
         'annotations': {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': False},
     },
     {
         'name': 't7_doctor',
         'title': 'Triple Seven: check setup',
-        'description': 'Check token, model provider, detected stack and test tooling.',
-        'inputSchema': {'type': 'object', 'properties': {}},
+        'description': 'Check access, model provider, detected stack and test tooling.',
+        'inputSchema': {'type': 'object', 'properties': {'repo_path': {'type': 'string'}}},
         'annotations': {'readOnlyHint': True},
     },
 ]
@@ -97,6 +99,7 @@ class _Session:
     client_caps = {}
     client_info = {}
     progress_token = None
+    repo_path = ''
     progress = 0
     seq = 0
     lock = threading.Lock()
@@ -166,7 +169,7 @@ def _ensure_repo_cwd():
     """Run inside the developer's repository: T7_REPO, else the cwd if it is a git repo,
     else the workspace root the editor reports (MCP roots)."""
     from urllib.parse import unquote, urlparse
-    target = os.environ.get('T7_REPO')
+    target = SESSION.repo_path or os.environ.get('T7_REPO')
     if not target and gitops.run(['git', 'rev-parse', '--show-toplevel'], '.').returncode != 0 \
             and 'roots' in (SESSION.client_caps or {}):
         try:
@@ -246,6 +249,9 @@ def tool_scan(args):
         os.environ['T7_LLM_DEFAULT'] = 'client'     # use the editor's own model (Copilot, …)
     trace.ON_STEP = on_step
     _ensure_repo_cwd()
+    if gitops.run(['git', 'rev-parse', '--show-toplevel'], '.').returncode != 0:
+        return _text(f'No git repository found (working directory: {os.getcwd()}). Call t7_scan again '
+                     'with repo_path set to the absolute path of the workspace / repository root.'), True
     buf = io.StringIO()
     # Never let anything reach stdout (it is the protocol channel).
     with contextlib.redirect_stdout(buf):
@@ -360,6 +366,7 @@ def handle(msg):
         return ok({'tools': TOOLS})
     if method == 'tools/call':
         SESSION.progress_token = (params.get('_meta') or {}).get('progressToken')
+        SESSION.repo_path = str((params.get('arguments') or {}).get('repo_path') or '')
         SESSION.progress = 0
         name = params.get('name')
         fn = HANDLERS.get(name)
@@ -370,10 +377,11 @@ def handle(msg):
             result, is_error = (out if isinstance(out, tuple) else (out, False))
             return ok({**result, 'isError': bool(is_error)})
         except AccessError as e:
-            return ok({**_text(f'Triple Seven is not connected for this repository.\n{e}\n\n'
-                               'Tell the developer to run `t7 setup` in a terminal inside the repository '
-                               '(the token is stored for that repository, so mcp.json needs no token), '
-                               'then retry. Do not attempt the review yourself.'), 'isError': True})
+            where = os.getcwd()
+            return ok({**_text(f'Triple Seven: no access for {where}.\n{e}\n\n'
+                               f'Ask the developer to run this in a terminal, approve the sign-in in the '
+                               f'browser, then retry:\n  cd {where} && t7 setup\n'
+                               'Do not attempt the security review yourself.'), 'isError': True})
         except SystemExit as e:
             return ok({**_text(f't7 stopped: exit {e.code}. Run t7_doctor.'), 'isError': True})
         except Exception as e:  # noqa: BLE001 — tool errors are results, not protocol errors

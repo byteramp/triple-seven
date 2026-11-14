@@ -1,6 +1,8 @@
 """t7 — Triple Seven command line.
 
-  t7 setup                      connect this repository (token, verified against Byteramp)
+  t7 setup                      connect this repository (browser sign-in) + your editors
+  t7 editors                    add Triple Seven to your editors / AI assistants (once)
+  t7 status                     repositories connected on this machine
   t7 scan [--base REF] [--no-fix] [--ci] [--json] [--quiet]
   t7 fix  <SEC-REQ-ID>          apply a verified fix (and its regression test) locally
   t7 list                       fixes available from the last local scan
@@ -107,6 +109,16 @@ def _root_or_none():
         return None
 
 
+def _expiry(cfg_or_entry_expires):
+    from .access import days_left
+    left = days_left(cfg_or_entry_expires)
+    if left is None:
+        return ''
+    if left <= 0:
+        return 'expired'
+    return f'valid {round(left)} more days (renews automatically)' if left > 1 else 'expires today'
+
+
 def cmd_doctor(a):
     root = _root_or_none()
     cfg = Config.load(root)
@@ -123,71 +135,182 @@ def cmd_doctor(a):
         print(f"stack        {', '.join(prof.stack) or 'unknown'}")
         print(f"tests        {prof.test_cmd or '—'}  (L2 proofs {'on' if prof.can_prove else 'off'})")
         print(f"lint/types   {prof.lint_cmd or '—'} / {prof.type_cmd or '—'}")
+    from . import editors
+    eds = [label for label, _ in editors.detect()]
+    print(f"editors      {', '.join(eds) if eds else 'none detected'}  (t7 editors to add Triple Seven)")
     if not cfg.token:
-        print('\nRun `t7 setup` to connect. An active Triple Seven subscription and repository token are required.')
+        print('\nRun `t7 setup` in the repository to connect. An active Triple Seven subscription is required.')
         return 1
-    if cfg.token:
-        from .api import APIError, Byteramp
-        try:
-            pol = Byteramp(cfg).config()
-            llm = pol['llm']
-            print(f"repository   {pol['repository']['full_name']}")
-            print(f"byteramp LLM {'enabled (opt-in recorded)' if llm['byteramp_allowed'] else 'not enabled'}")
-            if cfg.llm == 'byteramp' and not llm['byteramp_allowed']:
-                print('  → opt in under Triple Seven → Repositories, or set T7_LLM to your own provider.')
-        except APIError as e:
-            print(f'api check    FAILED: {e}')
-            return 1
+    from .api import APIError, Byteramp
+    try:
+        pol = Byteramp(cfg).config()
+    except APIError as e:
+        print(f'access       FAILED: {e.detail or e.status}')
+        return 1
+    llm, tok = pol['llm'], pol.get('token') or {}
+    print(f"repository   {pol['repository']['full_name']}")
+    print(f"access       active · {tok.get('kind', '?')} token, {_expiry(tok.get('expires_at')) or 'no expiry'}")
+    print(f"byteramp LLM {'enabled (opt-in recorded)' if llm['byteramp_allowed'] else 'not enabled'}")
+    if cfg.llm == 'byteramp' and not llm['byteramp_allowed']:
+        print('  → opt in under Triple Seven → Repositories, or set T7_LLM to your own provider.')
     return 0
 
 
 def _read_token():
-    if not sys.stdin.isatty():                       # piped: printf %s "$TOKEN" | t7 setup
+    if not sys.stdin.isatty():                       # piped: printf %s "$TOKEN" | t7 setup --token
         return sys.stdin.readline().strip()
-    return getpass.getpass('Repository token (input hidden): ').strip()
+    return getpass.getpass('Paste your token (input hidden): ').strip()
 
 
-def cmd_setup(a):
+def _repo_hint(root):
+    if not root:
+        return ''
+    p = gitops.run(['git', 'remote', 'get-url', 'origin'], root)
+    return p.stdout.strip() if p.returncode == 0 and p.stdout.strip() else root.name
+
+
+def _browser_sign_in(api_url, root):
+    """Device authorization: show a code, the developer approves it in the browser."""
+    import platform
+    import time
+    import webbrowser
     from .api import APIError, Byteramp
-    root = None if a.default else _root_or_none()
-    print('Triple Seven · Byteramp — connect\n')
-    print('Get your token: Portal → Triple Seven → Repositories → your repository.')
-    if root:
-        print(f'Repository on this machine: {root}')
-    else:
-        print('Not inside a git repository: the token is stored as your default.')
+    try:
+        d = Byteramp.public(api_url, 'device/', {'hostname': platform.node()[:120],
+                                                 'repo_hint': _repo_hint(root), 'agent_version': __version__})
+    except APIError as e:
+        print(f'Cannot reach {api_url} ({e.detail or e.status}).', file=sys.stderr)
+        return None
+    url = d['verification_uri_complete']
+    print('Approve this sign-in in your browser:\n')
+    print(f'    {url}\n')
+    print(f"    Code: {d['user_code']}   (check that the browser shows the same code)\n")
+    print('No portal login? Open your invitation e-mail and enter the code there.')
+    try:
+        if sys.stdout.isatty() and not os.environ.get('T7_NO_BROWSER'):
+            webbrowser.open(url)
+    except Exception:  # noqa: BLE001 — headless machines: the printed link is enough
+        pass
+    deadline = time.time() + int(d.get('expires_in') or 900)
+    print('Waiting for approval … (Ctrl+C to cancel)', flush=True)
+    try:
+        while time.time() < deadline:
+            time.sleep(int(d.get('interval') or 3))
+            try:
+                r = Byteramp.public(api_url, 'device/poll/', {'device_code': d['device_code']})
+            except APIError as e:
+                if e.status == 0:
+                    continue                               # transient network error
+                print(f'Sign-in failed ({e.detail or e.status}).', file=sys.stderr)
+                return None
+            st = r.get('status')
+            if st == 'approved':
+                return r
+            if st in ('denied', 'expired', 'done', 'invalid'):
+                print(r.get('detail') or f'Sign-in {st}. Run `t7 setup` again.', file=sys.stderr)
+                return None
+    except KeyboardInterrupt:
+        print('\nCancelled.', file=sys.stderr)
+        return None
+    print('The code expired. Run `t7 setup` again.', file=sys.stderr)
+    return None
+
+
+def _paste_token(cfg):
+    from .api import APIError, Byteramp
     token = _read_token()
     if not token.startswith('t7_'):
         print('That does not look like a Triple Seven token (it starts with t7_).', file=sys.stderr)
-        return 1
-    cfg = Config.load(root)
+        return None
     cfg.token, cfg.offline = token, False
-    if a.api_url:
-        cfg.api_url = a.api_url.rstrip('/')
-    print('Checking access …')
     try:
         pol = Byteramp(cfg).config()
     except APIError as e:
         if e.status in (401, 402, 403):
-            print(f'Token not accepted ({e.detail or e.status}). It may be revoked or expired, or the '
-                  'subscription inactive. Create a new one in the portal.', file=sys.stderr)
+            print(f'Token not accepted ({e.detail or e.status}). Nothing was saved.', file=sys.stderr)
         else:
             print(f'Cannot reach {cfg.api_url} ({e.detail or e.status}). Nothing was saved.', file=sys.stderr)
+        return None
+    tok = pol.get('token') or {}
+    return {'token': token, 'api_url': cfg.api_url, 'repository': pol['repository']['full_name'],
+            'expires_at': tok.get('expires_at'), 'kind': tok.get('kind') or 'developer', 'email': ''}
+
+
+def _yes(question, default=True):
+    if not sys.stdin.isatty():
+        return default
+    ans = input(f"{question} [{'Y/n' if default else 'y/N'}] ").strip().lower()
+    return default if not ans else ans in ('y', 'yes', 'j', 'ja')
+
+
+def _register_editors(assume_yes=False):
+    from . import editors
+    found = editors.detect()
+    if not found:
+        print('\nNo supported editor found (VS Code, Cursor, Windsurf, Claude Code, Codex).')
+        print('Add Triple Seven by hand later: t7 editors --show')
+        return
+    print(f"\nEditors on this machine: {', '.join(label for label, _ in found)}")
+    if not (assume_yes or _yes('Add Triple Seven to them? (once, for all your repositories)')):
+        print('Skipped. Run `t7 editors` any time.')
+        return
+    icon = {'added': '✓', 'ok': '✓', 'manual': '!'}
+    for label, state, detail in editors.register():
+        print(f"  {icon.get(state, '·')} {label:<16} {'already set up' if state == 'ok' else detail}")
+    print('  Restart open editors (or reload the window) to pick it up.')
+
+
+def cmd_setup(a):
+    from . import access
+    root = None if a.default else _root_or_none()
+    print(access.WELCOME.split('\n')[0] + ' — setup\n')
+    if root is None and not a.default:
+        print('You are not inside a git repository. Triple Seven connects one repository at a time:')
+        print('  cd path/to/your-repository && t7 setup\n')
+        _register_editors(a.yes)
         return 1
-    repo = (pol.get('repository') or {}).get('full_name', '')
-    credentials.store(token, cfg.api_url, repo, root)
-    llm = pol.get('llm') or {}
-    print(f'\n✓ Connected to {repo}')
-    print(f'  Token stored in {credentials.path()} (only readable by you).')
+    cfg = Config.load(root)
+    if a.api_url:
+        cfg.api_url = a.api_url.rstrip('/')
+    print(f'Repository: {root}\n' if root else 'Storing a default token for all repositories.\n')
+    got = _paste_token(cfg) if a.token else _browser_sign_in(cfg.api_url, root)
+    if not got:
+        return 1
+    # Store the URL this sign-in actually used (it worked), not the server's public hint.
+    credentials.store(got['token'], cfg.api_url, got['repository'], root,
+                      expires_at=got.get('expires_at'), kind=got.get('kind') or 'developer',
+                      email=got.get('email') or '')
+    print(f"\n✓ Connected to {got['repository']}" + (f" as {got['email']}" if got.get('email') else ''))
+    exp = _expiry(got.get('expires_at'))
+    print(f'  Token stored in {credentials.path()} (only readable by you){" · " + exp if exp else ""}.')
     if os.environ.get('T7_TOKEN'):
         print('  Note: T7_TOKEN is set in this shell and takes precedence over the stored token.')
-    print(f"  Byteramp models: {'enabled' if llm.get('byteramp_allowed') else 'not enabled for this repository'}")
-    if not llm.get('byteramp_allowed'):
-        print('  → enable them under Triple Seven → Repositories, or set T7_LLM to your own provider.')
-    print('\nNext:')
-    print('  t7 scan          review your current change')
-    print('  t7 scan --all    review the whole repository')
-    print('  t7 mcp           use it from your IDE assistant (no token needed in mcp.json now)')
+    if not a.no_editors:
+        _register_editors(a.yes)
+    print('\nYou are set. Next:')
+    print('  t7 scan                review your current change (branch + uncommitted work)')
+    print('  t7 scan --all          review the whole repository')
+    print('  In your editor\'s AI chat: "review my change with Triple Seven"')
+    return 0
+
+
+def cmd_editors(a):
+    from . import editors
+    if a.show:
+        for title, code in editors.manual_snippets():
+            print(f'# {title}\n{code}\n')
+        return 0
+    _register_editors(assume_yes=True)
+    return 0
+
+
+def cmd_status(a):
+    rows = credentials.entries()
+    if not rows:
+        print('No repositories connected on this machine. Run `t7 setup` inside a repository.')
+        return 0
+    for key, e in rows:
+        print(f"{e.get('repository', '?'):<40} {key}\n    {_expiry(e.get('expires_at')) or 'expiry unknown'}")
     return 0
 
 
@@ -202,10 +325,17 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog='t7', description='Triple Seven by Byteramp')
     p.add_argument('--version', action='version', version=f't7 {__version__}')
     sub = p.add_subparsers(dest='cmd')
-    su = sub.add_parser('setup', help='connect this repository with your token')
+    su = sub.add_parser('setup', help='connect this repository (browser sign-in) and your editors')
+    su.add_argument('--token', action='store_true', help='paste a token instead of signing in in the browser')
     su.add_argument('--default', action='store_true', help='store as default for all repositories')
+    su.add_argument('--no-editors', action='store_true', help='do not offer to register editors')
+    su.add_argument('--yes', '-y', action='store_true', help='register editors without asking')
     su.add_argument('--api-url', help='API base URL (default https://t7.byteramp.se/api)')
     su.set_defaults(fn=cmd_setup)
+    ed = sub.add_parser('editors', help='add Triple Seven to VS Code, Cursor, Windsurf, Claude Code, Codex')
+    ed.add_argument('--show', action='store_true', help='print the configs instead of writing them')
+    ed.set_defaults(fn=cmd_editors)
+    sub.add_parser('status', help='repositories connected on this machine').set_defaults(fn=cmd_status)
     lo = sub.add_parser('logout', help='remove the stored token for this repository')
     lo.add_argument('--default', action='store_true')
     lo.set_defaults(fn=cmd_logout)

@@ -38,6 +38,9 @@ class Config:
                                                         '.github/ISSUE_TEMPLATE/'])
     offline: bool = False
     token_source: str = ''       # env | setup | ''
+    token_key: str = None        # where a `t7 setup` token is stored (repo path, None = default)
+    token_expires_at: str = ''
+    token_kind: str = ''
 
     @classmethod
     def load(cls, root):
@@ -56,9 +59,11 @@ class Config:
             c.token, c.token_source = env['T7_TOKEN'], 'env'
         else:
             from . import credentials
-            stored = credentials.lookup(root)
+            key, stored = credentials.lookup(root)
             if stored and stored.get('token'):
-                c.token, c.token_source = stored['token'], 'setup'
+                c.token, c.token_source, c.token_key = stored['token'], 'setup', key
+                c.token_expires_at = stored.get('expires_at') or ''
+                c.token_kind = stored.get('kind') or ''
         c.api_url = (env.get('T7_API_URL') or (stored or {}).get('api_url') or c.api_url).rstrip('/')
         c.llm = env.get('T7_LLM') or env.get('T7_LLM_DEFAULT') or c.llm
         c.llm_model = env.get('T7_LLM_MODEL', c.llm_model)
