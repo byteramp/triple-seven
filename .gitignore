@@ -6,3 +6,6 @@ dist/
 .pytest_cache/
 .t7/
 .venv/
+
+# Real-CVE corpus: third-party code under its own licences — built locally, never committed
+bench/real/

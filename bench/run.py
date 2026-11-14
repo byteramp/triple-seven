@@ -67,9 +67,17 @@ class Timer:
         return out or {}
 
 
-def triage(llm, t, c):
+def triage(llm, t, c, screen=None):
     h = c['hypothesis']
     code = f"## {c['path']}\n{numbered(c['code'])}"
+    if screen is not None:
+        # Cascade: the small model already screened (phase 1); only what it did not reject
+        # reaches the big model here.
+        sd = screen.get(c['id']) or {}
+        if sd.get('verdict') == 'rejected':
+            expect_vuln = c['vuln'] is not None
+            return {'id': c['id'], 'vulnerable': expect_vuln, 'triage': 'rejected', 'final': 'screened-out',
+                    'correct': not expect_vuln, 'reasoning': str(sd.get('reasoning', ''))[:300], 'screened': True}
     d = t.run('triage', lambda: llm.json('triage', TRIAGE_SYSTEM,
                                          f"HYPOTHESIS: {h['title']}\nCWE: {h['cwe']}\nClaim: {h['description']}\n"
                                          f"Location hint: {c['path']}\n\nCODE:\n{code}", default={}))
@@ -157,21 +165,49 @@ def main():
     ap.add_argument('--ollama', default='http://localhost:11434')
     ap.add_argument('--tasks', default='triage,analyze,fix')
     ap.add_argument('--only', default='', help='comma-separated case ids')
+    ap.add_argument('--corpus', default='builtin', choices=['builtin', 'real', 'all'],
+                    help='builtin = hand-written cases; real = bench/real/cases.json (real CVE fixes)')
+    ap.add_argument('--screen-model', default='', help='cascade: small model screens before --model')
+    ap.add_argument('--tag', default='', help='suffix for the result file')
     a = ap.parse_args()
 
     cfg = Config()
     cfg.llm, cfg.llm_model, cfg.llm_base_url, cfg.offline = 'ollama', a.model, a.ollama, True
     llm = LLM(cfg, None)
+    screen = None
+    if a.screen_model:
+        scfg = Config()
+        scfg.llm, scfg.llm_model, scfg.llm_base_url, scfg.offline = 'ollama', a.screen_model, a.ollama, True
+        screen = LLM(scfg, None)
     t = Timer()
-    cases = [c for c in CASES if not a.only or c['id'] in a.only.split(',')]
+    pool = []
+    if a.corpus in ('builtin', 'all'):
+        pool += CASES
+    if a.corpus in ('real', 'all'):
+        pool += json.loads((Path(__file__).parent / 'real' / 'cases.json').read_text())
+    cases = [c for c in pool if not a.only or c['id'] in a.only.split(',')]
     tasks = a.tasks.split(',')
     res = {'model': a.model, 'triage': [], 'analyze': [], 'fix': []}
     t0 = time.time()
     # warm-up (model load is not part of per-call latency)
+    screened = None
+    if screen is not None:
+        # Phase 1: the small model screens every case in one go (one model load — the CPU box
+        # keeps one model in memory, so alternating per case would reload constantly).
+        screen.complete('plan', 'Reply with OK.', 'ping', max_tokens=5)
+        screened = {}
+        for c in cases:
+            h = c['hypothesis']
+            code = f"## {c['path']}\n{numbered(c['code'])}"
+            screened[c['id']] = t.run('screen', lambda: screen.json(
+                'triage', TRIAGE_SYSTEM, f"HYPOTHESIS: {h['title']}\nCWE: {h['cwe']}\nClaim: {h['description']}\n"
+                f"Location hint: {c['path']}\n\nCODE:\n{code}", default={}))
+            print(f"[{time.time() - t0:6.0f}s] screen {c['id']}: {screened[c['id']].get('verdict')}",
+                  file=sys.stderr, flush=True)
     llm.complete('plan', 'Reply with OK.', 'ping', max_tokens=5)
     for c in cases:
         if 'triage' in tasks:
-            res['triage'].append(triage(llm, t, c))
+            res['triage'].append(triage(llm, t, c, screened))
         if 'analyze' in tasks:
             res['analyze'].append(analyze(llm, t, c))
         if 'fix' in tasks and c.get('fix_test'):
@@ -199,13 +235,20 @@ def main():
                                          max(1, sum(1 for r in ana if not r['vulnerable'])), 2) if ana else None,
         'fix_success': f"{sum(r['correct'] for r in fx)}/{len(fx)}" if fx else None,
         'json_valid_rate': round(sum(x['json_ok'] for x in t.calls) / len(t.calls), 3) if t.calls else None,
-        'median_seconds': {k: lat(k) for k in ('triage', 'critic', 'analyze', 'fix')},
+        'median_seconds': {k: lat(k) for k in ('screen', 'triage', 'critic', 'analyze', 'fix')},
+        'cases': len(cases), 'corpus': a.corpus, 'screen_model': a.screen_model,
+        'screened_out': sum(1 for r in tri if r.get('screened')),
+        'screened_out_wrongly': sum(1 for r in tri if r.get('screened') and r['vulnerable']),
+        'seconds_per_case': round((time.time() - t0) / max(1, len(cases)), 1),
+        'precision': (lambda tp, fp: round(tp / (tp + fp), 3) if tp + fp else None)(
+            sum(1 for r in vul if r['final'] == 'confirmed'), sum(1 for r in dec if r['final'] == 'confirmed')),
         'total_seconds': round(time.time() - t0),
     }
     res['summary'] = s
     out = Path(__file__).parent / 'results'
     out.mkdir(exist_ok=True)
-    (out / (re.sub(r'[^A-Za-z0-9_.-]+', '_', a.model) + '.json')).write_text(json.dumps(res, indent=2))
+    name = re.sub(r'[^A-Za-z0-9_.-]+', '_', a.model) + (f'_{a.tag}' if a.tag else '')
+    (out / (name + '.json')).write_text(json.dumps(res, indent=2))
     print(json.dumps(s, indent=2))
 
 
