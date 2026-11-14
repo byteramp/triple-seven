@@ -30,6 +30,8 @@ class Byteramp:
              'User-Agent': f't7-agent/{__version__}'}
         # Organisation tokens: which repository this call is about (the remote URL, not code).
         from urllib.parse import quote
+        if getattr(self.cfg, 'context', '') == 'ci':
+            h['X-T7-Context'] = 'ci'
         if getattr(self.cfg, 'remote', ''):
             h['X-T7-Remote'] = quote(self.cfg.remote[:500], safe=':/@.~')
         if getattr(self.cfg, 'repo_name', ''):

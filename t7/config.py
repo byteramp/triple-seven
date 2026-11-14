@@ -41,6 +41,7 @@ class Config:
     offline: bool = False
     policy_label: str = ''        # set when an organisation model policy applies
     assistant: str = ''           # claude | codex | gemini | copilot when llm == 'assistant'
+    context: str = 'local'        # 'ci' in CI / pull requests: the server applies the CI policy
     token_source: str = ''       # env | setup | ''
     token_key: str = None        # where a `t7 setup` token is stored (repo path, None = default)
     token_expires_at: str = ''

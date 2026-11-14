@@ -2,6 +2,12 @@
 
 Update with `t7 update`. t7 reminds you (at most once a day) when a new version is out.
 
+## 0.6.1
+- **Separate model policy for CI.** CI runs (`t7 scan --ci`) follow the organisation's CI
+  policy (e.g. Byteramp or your own model), developer machines follow the developers'
+  policy (e.g. their own signed-in assistant). CI tokens always count as CI.
+- `t7 rollout --dry-run` says how many pull requests would be opened.
+
 ## 0.6.0
 - **`t7 rollout ORG`** (administrators): switches Triple Seven on for a whole GitHub
   organisation with your own `gh` login — sets the organisation secret `T7_TOKEN`, opens a

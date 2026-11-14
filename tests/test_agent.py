@@ -714,3 +714,13 @@ exit 0
     assert '1 pull request(s) opened, 1 already set up' in out
     from t7.rollout import workflow
     assert 'secrets.T7_TOKEN' in workflow('develop') and 'branches: [develop]' in workflow('develop')
+
+
+
+def test_ci_runs_announce_ci_context(repo):
+    from t7.api import Byteramp
+    from t7.config import Config
+    cfg = Config.load(repo)
+    assert 'X-T7-Context' not in Byteramp(cfg)._headers()
+    cfg.context = 'ci'
+    assert Byteramp(cfg)._headers()['X-T7-Context'] == 'ci'

@@ -79,6 +79,8 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
     started = time.time()
     root = gitops.repo_root()
     cfg = Config.load(root)
+    if ci:
+        cfg.context = 'ci'          # the organisation's CI model policy applies, not the developers'
     api = Byteramp(cfg)
     llm = LLM(cfg, api)
     gh = (github_context() or gitlab_context()) if ci else None
