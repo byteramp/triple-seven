@@ -167,6 +167,7 @@ def run(a):
             continue
         if a.dry_run:
             print(f'  · {name}: would open a pull request')
+            opened += 1
             continue
         try:
             url = open_pr(org, name, r['default'], a.api_url or '')
@@ -187,7 +188,8 @@ def run(a):
             except RolloutError as e:
                 print(f'✗ ruleset: {e}  (organisation rulesets need GitHub Team or Enterprise)', file=sys.stderr)
 
-    print(f'\nDone: {opened} pull request(s) opened, {skipped} already set up'
+    verb = 'would be opened (dry run — nothing changed)' if a.dry_run else 'opened'
+    print(f'\nDone: {opened} pull request(s) {verb}, {skipped} already set up'
           + (f', {len(failed)} failed ({", ".join(failed)})' if failed else '') + '.')
     if not a.require_check:
         print(f'Merge gate: https://github.com/organizations/{org}/settings/rules — require the status '
