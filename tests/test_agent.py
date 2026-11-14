@@ -295,11 +295,12 @@ def test_critic_needs_verbatim_control_quote():
 
 
 def test_mcp_scan_uses_editor_model_via_sampling(repo, monkeypatch):
-    """The editor (e.g. VS Code Copilot) runs every model call via MCP sampling."""
+    """The editor (e.g. VS Code Copilot) runs every model call via MCP sampling — only when
+    chosen (here explicitly; in an organisation, by the model policy)."""
     import os as _os
     import threading
     from t7 import mcp
-    monkeypatch.delenv('T7_LLM', raising=False)
+    monkeypatch.setenv('T7_LLM', 'client')
     monkeypatch.delenv('T7_LLM_DEFAULT', raising=False)
     monkeypatch.setattr(llm_mod.LLM, '_dispatch', _ORIG_DISPATCH)   # real path → MCP sampling
     roles = [('PLANNER', 'plan'), ('ARCHITECTURE MAPPER', 'map'), ('SPECIALIST', 'analyze'),
@@ -581,3 +582,44 @@ def test_doctor_warns_when_t7_token_shadows_the_sign_in(repo, monkeypatch, capsy
     cli.cmd_doctor(None)
     out = capsys.readouterr().out
     assert 'OVERRIDES your t7 setup sign-in' in out and 'unset T7_TOKEN' in out
+
+
+
+def test_model_policy_overrides_local_choice_and_never_falls_back(monkeypatch):
+    import pytest
+    from t7 import policy
+    from t7.access import AccessError
+    from t7.config import Config
+    monkeypatch.setenv('T7_LLM', 'ollama')
+    cfg = Config.load(None)
+    policy.apply(cfg, {'provider': 'byteramp', 'label': 'Byteramp EU models'})
+    assert cfg.llm == 'byteramp' and cfg.policy_label == 'Byteramp EU models'
+    # The editor's model only inside an editor that offers sampling.
+    with pytest.raises(AccessError, match='editor'):
+        policy.apply(Config.load(None), {'provider': 'editor'}, can_sample=False)
+    c = Config.load(None)
+    policy.apply(c, {'provider': 'editor'}, can_sample=True)
+    assert c.llm == 'client' and c.llm_provider_kind == 'editor'
+    # Own model: endpoint from the policy, key only from this machine.
+    monkeypatch.delenv('T7_LLM_API_KEY', raising=False)
+    with pytest.raises(AccessError, match='T7_LLM_API_KEY'):
+        policy.apply(Config.load(None), {'provider': 'byo', 'kind': 'azure',
+                                         'base_url': 'https://acme.openai.azure.com', 'model': 'gpt-4o'})
+    monkeypatch.setenv('T7_LLM_API_KEY', 'k')
+    c = Config.load(None)
+    policy.apply(c, {'provider': 'byo', 'kind': 'azure', 'base_url': 'https://acme.openai.azure.com', 'model': 'gpt-4o'})
+    assert (c.llm, c.llm_base_url, c.llm_model, c.llm_provider_kind) == ('azure', 'https://acme.openai.azure.com', 'gpt-4o', 'byo')
+    # Local: Ollama must be reachable — no silent fallback.
+    monkeypatch.setenv('T7_LLM_BASE_URL', 'http://127.0.0.1:9')
+    with pytest.raises(AccessError, match='Ollama is not reachable'):
+        policy.apply(Config.load(None), {'provider': 'local', 'model': 'qwen3:8b'})
+
+
+def test_update_notice_once_a_day(tmp_path, monkeypatch):
+    from t7 import updates, __version__
+    monkeypatch.setenv('XDG_CACHE_HOME', str(tmp_path))
+    info = {'latest': '99.0.0', 'changelog_url': 'https://x/CHANGELOG.md'}
+    assert '99.0.0' in updates.notice(info) and 't7 update' in updates.notice(info, force=True)
+    assert updates.notice(info) == ''                        # not again today
+    assert updates.notice({'latest': __version__}) == ''      # up to date
+    assert updates.parse('0.10.0') > updates.parse('0.9.9')

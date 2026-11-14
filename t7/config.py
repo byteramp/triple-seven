@@ -37,6 +37,7 @@ class Config:
                                                         '.vscode/', '.cursor/', '.idea/', '.t7/',
                                                         '.github/ISSUE_TEMPLATE/'])
     offline: bool = False
+    policy_label: str = ''        # set when an organisation model policy applies
     token_source: str = ''       # env | setup | ''
     token_key: str = None        # where a `t7 setup` token is stored (repo path, None = default)
     token_expires_at: str = ''
@@ -83,11 +84,13 @@ class Config:
 
     @property
     def llm_provider_kind(self):
-        """Value reported to Byteramp (byteramp | byo | local)."""
+        """Value reported to Byteramp (byteramp | byo | local | editor)."""
         if self.llm == 'byteramp':
             return 'byteramp'
         if self.llm == 'ollama':
             return 'local'
+        if self.llm == 'client':
+            return 'editor'
         return 'byo'
 
 

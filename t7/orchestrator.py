@@ -24,6 +24,7 @@ from .agents.triage import TRIAGE_SYSTEM, _context, triage_all
 from .ci import ZERO, merges, push_context, set_github_status
 from .codeowners import CodeOwners
 from .api import APIError, Byteramp
+from . import policy as model_policy, updates
 from .access import AccessError, NOT_CONNECTED, REJECTED, UNREACHABLE, offline_allowed, renew_if_due
 from .config import Config
 from .context import detect
@@ -61,7 +62,16 @@ def _committed_fixes(root):
     return out
 
 
-def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=None):
+def analysed_with(cfg):
+    names = {'byteramp': 'Byteramp EU models', 'client': "the editor's own model", 'ollama': 'local Ollama',
+             'azure': 'Azure OpenAI', 'openai': 'OpenAI-compatible', 'anthropic': 'Anthropic'}
+    base = names.get(cfg.llm, cfg.llm)
+    m = (cfg.llm_model or '').split('/')[-1]
+    return f"{base}{(' · ' + m) if m and cfg.llm != 'byteramp' else ''}" + (
+        ' (organisation policy)' if cfg.policy_label else '')
+
+
+def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=None, can_sample=False):
     started = time.time()
     root = gitops.repo_root()
     cfg = Config.load(root)
@@ -78,11 +88,23 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
     changed = gitops.changed_files(root, base_sha, include_worktree=not ci, ignore=cfg.ignore_paths)
     profile = detect(root, cfg)
 
-    policy, run_id = {}, None
+    policy, run_id, update_notice = {}, None, ''
     if cfg.offline and not offline_allowed():
         raise AccessError(NOT_CONNECTED)
     if not cfg.offline:
         renew_if_due(cfg, api)
+        # The organisation's model policy and the agent version info, before any model call.
+        try:
+            pre = api.config()
+        except APIError as e:
+            if e.status in (401, 402, 403):
+                raise AccessError(REJECTED.format(detail=e.detail or e.status)) from None
+            raise AccessError(UNREACHABLE.format(url=cfg.api_url, detail=e.detail or e.status)) from None
+        update_notice = updates.notice(pre.get('agent'))
+        if update_notice and not quiet:
+            print(f't7: {update_notice}', file=sys.stderr)
+        model_policy.apply(cfg, (pre.get('llm') or {}).get('required'), can_sample=can_sample)
+        llm.model = cfg.llm_model or ('byteramp-vps' if cfg.llm == 'byteramp' else '')
         try:
             r = api.start_run(trigger='pull_request' if gh else ('push' if push or ci else 'local'),
                               ref=os.environ.get('GITHUB_HEAD_REF') or gitops.current_branch(root),
@@ -100,6 +122,8 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                 if fresh.token and fresh.token != cfg.token:
                     cfg.token = fresh.token
                     return scan_repo(base=base, fix=fix, ci=ci, quiet=quiet, enrich=enrich, client=client)
+            if e.status in (409, 426):     # policy mismatch / agent too old: server explains
+                raise AccessError(str(e.detail)) from None
             if e.status == 403 and 'Byteramp models' in str(e.detail):
                 raise AccessError('Byteramp models are not enabled for this repository yet. Your administrator '
                                   'can enable them (portal → Repositories, per repository or for all). '
@@ -116,7 +140,8 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
         cfg.parallel = max(1, min(cfg.parallel, int((policy.get('llm') or {}).get('max_parallel') or 1)))
     tracer = Tracer(None if cfg.offline else api, run_id, quiet=quiet)
     suppressed = set(policy.get('suppressed_fingerprints', []))
-    sec_ids, result = {}, {'gate': {'verdict': 'pass'}, 'summary_markdown': ''}
+    sec_ids, result = {}, {'gate': {'verdict': 'pass'}, 'summary_markdown': '',
+                           'update_notice': update_notice, 'analysed_with': analysed_with(cfg)}
     memory = {'rejected': [], 'reused': []}
     rejections = frozenset(policy.get('rejections', []))
     owners = CodeOwners.load(root)
@@ -198,6 +223,7 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
         if run_id:
             result = {**result, **api.finish(
                 run_id, resolved_fingerprints=result.get('resolved', []),
+                llm_model=(llm.model or '').replace('client:', ''),
                 committed_patches=_committed_fixes(root),
                 rejected=memory['rejected'], reused_rejections=memory['reused'],
                 merges=merges(root, push_base) if push else [],

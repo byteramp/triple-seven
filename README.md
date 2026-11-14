@@ -68,6 +68,7 @@ canonical remote.
 | `t7 doctor` | check access, model, tests, editors |
 | `t7 scan [--all]` | review the change (or the whole repository) |
 | `t7 list` / `t7 fix ID` | fixes from the last scan / apply one |
+| `t7 update` | update to the latest release (t7 reminds you once a day) |
 | `t7 logout` | remove the stored token for this repository |
 
 ## In your editor / AI assistant (MCP)
@@ -77,12 +78,16 @@ canonical remote.
 `t7_doctor`. The server finds the open workspace itself (or the assistant
 passes `repo_path`).
 
-- **VS Code + GitHub Copilot:** Copilot Chat → **Agent** mode → ask. The
-  analysis runs on *your Copilot model* via MCP sampling (VS Code asks once to
-  allow it). Set `T7_LLM` to use another model.
-- **Claude Code / Cursor / Windsurf / Codex:** ask in chat. These clients do not
-  offer sampling: the analysis uses Byteramp models (after your administrator's
-  opt-in) or the provider you set with `T7_LLM`.
+**Which model analyses the code** is decided by your organisation's *model policy*
+(portal → Repositories): Byteramp EU models, your organisation's own model (endpoint in
+the policy, API key in your environment as `T7_LLM_API_KEY`), a local Ollama model, or
+the editor's own model via MCP sampling (e.g. VS Code + Copilot — only if the policy
+allows it). t7 applies the policy before any model call; it overrides `T7_LLM` and
+never falls back to another model. Every result states what analysed it. Without a
+policy, t7 uses Byteramp models (after opt-in) or what you set with `T7_LLM`.
+
+Ask in your assistant's chat (VS Code: Copilot Chat in **Agent** mode). The assistant
+only starts `t7_scan`; the review itself is t7's own pipeline with the model above.
 
 Manual configuration (if you skipped it): `t7 editors --show`.
 

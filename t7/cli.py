@@ -2,7 +2,8 @@
 
   t7 setup                      connect this repository (browser sign-in) + your editors
   t7 editors                    add Triple Seven to your editors / AI assistants (once)
-  t7 status                     repositories connected on this machine
+  t7 status                     what this machine is connected to
+  t7 update                     update t7 to the latest release
   t7 scan [--base REF] [--no-fix] [--ci] [--json] [--quiet]
   t7 fix  <SEC-REQ-ID>          apply a verified fix (and its regression test) locally
   t7 list                       fixes available from the last local scan
@@ -28,7 +29,7 @@ SEV_ICON = {'critical': '🟥', 'high': '🟧', 'medium': '🟨', 'low': '🟦',
 def _print_human(res):
     surfaced = res.get('surfaced') or []
     verdict = (res.get('gate') or {}).get('verdict', 'pass')
-    print(f"\nTriple Seven · gate {verdict.upper()} · {res.get('seconds')}s")
+    print(f"\nTriple Seven · gate {verdict.upper()} · {res.get('seconds')}s · analysed with {res.get('analysed_with')}")
     if not surfaced:
         print('No confirmed security issues in this change. ✓')
     for h in surfaced:
@@ -165,6 +166,10 @@ def cmd_doctor(a):
         print(f'access       FAILED: {e.detail or e.status}')
         return 1
     llm, tok = pol.get('llm') or {}, pol.get('token') or {}
+    from . import updates
+    note = updates.notice(pol.get('agent'), force=True)
+    if note:
+        print(f'update       {note}')
     if pol.get('organization'):
         print(f"organisation {pol['organization']}")
     print(f"access       active · {tok.get('kind', '?')} token, {_expiry(tok.get('expires_at')) or 'no expiry'}")
@@ -173,6 +178,11 @@ def cmd_doctor(a):
         return 0
     print(f"repository   {pol['repository']['full_name']}"
           + ('  (new: listed as discovered for your administrator)' if pol.get('discovered') else ''))
+    req = llm.get('required')
+    if req:
+        print(f"model policy {req.get('label') or req.get('provider')}  (set by your administrator for this "
+              f"{req.get('scope') or 'organisation'}; overrides T7_LLM)")
+        return 0
     print(f"byteramp LLM {'enabled (opt-in recorded)' if llm.get('byteramp_allowed') else 'not enabled'}")
     if cfg.llm == 'byteramp' and not llm.get('byteramp_allowed'):
         print('  → your administrator can enable Byteramp models for this repository or for all')
@@ -456,6 +466,20 @@ def cmd_status(a):
     return 0
 
 
+def cmd_update(a):
+    import subprocess
+    from . import updates
+    cmd = updates.update_command()
+    print(f't7 {__version__} — updating ({updates.install_kind()}): {" ".join(cmd)}')
+    p = subprocess.run(cmd)
+    if p.returncode != 0:
+        print('Update failed. Try: pipx upgrade t7-agent   (or rerun the installer)', file=sys.stderr)
+        return 1
+    out = subprocess.run(['t7', '--version'], capture_output=True, text=True)
+    print(f"Now: {out.stdout.strip() or 'run t7 --version'}")
+    return 0
+
+
 def cmd_logout(a):
     root = None if a.default else _root_or_none()
     credentials.remove(root)
@@ -480,7 +504,8 @@ def main(argv=None):
     ed = sub.add_parser('editors', help='add Triple Seven to VS Code, Cursor, Windsurf, Claude Code, Codex')
     ed.add_argument('--show', action='store_true', help='print the configs instead of writing them')
     ed.set_defaults(fn=cmd_editors)
-    sub.add_parser('status', help='repositories connected on this machine').set_defaults(fn=cmd_status)
+    sub.add_parser('status', help='what this machine is connected to').set_defaults(fn=cmd_status)
+    sub.add_parser('update', help='update t7 to the latest release').set_defaults(fn=cmd_update)
     lo = sub.add_parser('logout', help='remove the stored token for this repository')
     lo.add_argument('--default', action='store_true')
     lo.set_defaults(fn=cmd_logout)

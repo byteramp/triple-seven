@@ -245,8 +245,8 @@ LOCAL_ONLY = '\n\n⚠ Local-only run (T7_ALLOW_OFFLINE): not recorded in the Tri
 def tool_scan(args):
     from . import trace
     from .orchestrator import scan_repo
-    if 'T7_LLM' not in os.environ and client_can_sample():
-        os.environ['T7_LLM_DEFAULT'] = 'client'     # use the editor's own model (Copilot, …)
+    # The editor's model (MCP sampling) is used only when the organisation's model policy says
+    # so — never automatically (plan §0c). t7 applies the policy inside scan_repo.
     trace.ON_STEP = on_step
     _ensure_repo_cwd()
     if gitops.run(['git', 'rev-parse', '--show-toplevel'], '.').returncode != 0:
@@ -256,14 +256,18 @@ def tool_scan(args):
     # Never let anything reach stdout (it is the protocol channel).
     with contextlib.redirect_stdout(buf):
         res = scan_repo(base=gitops.EMPTY_TREE if args.get('all') else args.get('base'),
-                        fix=args.get('fix', True), quiet=True, client='mcp')
+                        fix=args.get('fix', True), quiet=True, client='mcp',
+                        can_sample=client_can_sample())
     if res.get('no_changes'):
         return _text('Nothing changed compared with the base branch. Call t7_scan with all=true to '
                      'review the whole repository.' + ('' if res.get('run_id') else LOCAL_ONLY))
     root = _root()
+    head = f"Analysed with: {res.get('analysed_with')}\n"
+    if res.get('update_notice'):
+        head += f"Note for the developer: {res['update_notice']}\n"
     note = (f"\nPortal run: {res.get('run_id')}" if res.get('run_id') else
             LOCAL_ONLY)
-    return _text(_fmt_findings(_last(root)) + note)
+    return _text(head + _fmt_findings(_last(root)) + note)
 
 
 def tool_findings(args):
