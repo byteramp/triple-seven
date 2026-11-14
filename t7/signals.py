@@ -35,6 +35,14 @@ DETECTORS = [
      r'(?i)(\btools\s*=\s*\[|function_call|tool_choice|bind_tools|@tool\b|AgentExecutor|\.tool_calls\b)', 'llm'),
     ('llm_output_exec', None, r'(?i)(eval|exec|innerHTML|dangerouslySetInnerHTML|execute)\s*\(?.*(completion|response\.choices|llm|output_text|\.content)', 'llm'),
     ('iac_public_exposure', {'terraform', 'yaml'}, r'0\.0\.0\.0/0|publicly_accessible\s*=\s*true|acl\s*=\s*"public-read|block_public_acls\s*=\s*false|type:\s*LoadBalancer', 'iac'),
+    # ── Multi-tenant software ──
+    ('tenant_from_request', {'python'},
+     r'(?i)\b(org|organi[sz]ation|tenant|company|account|workspace)_?id\b\s*=\s*.*request\.(GET|POST|data|query_params|headers)', 'tenancy'),
+    ('tenant_from_request', {'javascript', 'typescript'},
+     r'(?i)req\.(body|query|params|headers)\.?\[?["\']?(org|organi[sz]ation|tenant|company|account|workspace)_?id', 'tenancy'),
+    # ── Agent-built software / MCP servers ──
+    ('mcp_tool_exec', {'python'}, r'(@(mcp|server|app)\.tool\b|FastMCP\(|\bTool\(name=)', 'agentic'),
+    ('mcp_tool_exec', {'javascript', 'typescript'}, r'(server\.(tool|registerTool)\(|new McpServer\()', 'agentic'),
     ('pii_logging', None, r'(?i)(log(ger)?\.\w+|print|console\.log)\(.*(password|token|ssn|personnummer|email|card)', 'data'),
 ]
 _COMPILED = [(k, langs, re.compile(rx), area) for k, langs, rx, area in DETECTORS]

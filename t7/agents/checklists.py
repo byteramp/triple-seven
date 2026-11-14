@@ -47,6 +47,23 @@ CHECKLISTS = {
         "privileged, host mounts; secrets in plain environment variables. A public HTTPS load "
         "balancer or CDN on 443 is the intended design and NOT a finding."
     ),
+    'tenancy': (
+        "Hunt: tenant/organisation/account ID read from the request (body, query, header, path) and "
+        "trusted instead of derived from the authenticated user; queries on shared tables without the "
+        "tenant filter (incl. .all(), raw SQL, aggregates, exports, search indexes); background jobs, "
+        "cron and queue consumers that load records by ID without re-checking the tenant; caches keyed "
+        "without the tenant; RAG/vector retrieval that does not filter by tenant; admin/support "
+        "impersonation without audit. A query scoped through request.user's organisation is NOT a finding."
+    ),
+    'agentic': (
+        "Hunt: (confused deputy) tools that act with the service's or developer's credentials on behalf "
+        "of model output without per-call authorization; MCP/tool definitions with unbounded scope "
+        "(shell, whole file system, any URL, wildcard permissions); prompt injection through tool "
+        "descriptions or tool results fed back to the model; tokens forwarded or widened across chained "
+        "agents/servers; data flows the agent adds (uploads, telemetry, new external calls) without "
+        "review; agent-to-agent calls trusted implicitly. Read-only, allow-listed tools with schema-"
+        "validated arguments are NOT findings."
+    ),
     'logic': (
         "Hunt: state-machine violations (skip/replay steps), check-then-act races with business "
         "impact (double spend, double approve), negative/zero/overflowing quantities, time-boundary "

@@ -2,6 +2,19 @@
 
 Update with `t7 update`. t7 reminds you (at most once a day) when a new version is out.
 
+## 0.7.0
+- **Living threat model.** Full scans and merged changes keep your repository's architecture
+  threat model current in the portal (map, threats, version timeline, auditor document).
+  The mapper now reuses the names of the existing model, so it stays coherent.
+- **Agent-built software & MCP.** New specialists for multi-tenant isolation and for agentic
+  code (confused deputy, unbounded tool/MCP permissions, prompt injection through tools,
+  agent-introduced data flows). Agent/MCP configuration (.mcp.json, .cursor, .vscode,
+  .claude, Gemini, Kiro, Codex) is reviewed when it changes: whole-file-system servers,
+  secrets in plain text, permission bypass, wildcard tools, plain-HTTP and unpinned servers.
+- **Checkpoint in the agent loop.** `t7 check` (seconds, no model) and `t7 hooks install`:
+  a git pre-commit hook plus a Claude Code Stop hook that tells the agent what to fix
+  before it finishes. `t7 scan` stays the full review.
+
 ## 0.6.1
 - **Separate model policy for CI.** CI runs (`t7 scan --ci`) follow the organisation's CI
   policy (e.g. Byteramp or your own model), developer machines follow the developers'

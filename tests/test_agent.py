@@ -724,3 +724,60 @@ def test_ci_runs_announce_ci_context(repo):
     assert 'X-T7-Context' not in Byteramp(cfg)._headers()
     cfg.context = 'ci'
     assert Byteramp(cfg)._headers()['X-T7-Context'] == 'ci'
+
+
+def test_agent_and_mcp_configuration_is_reviewed(tmp_path):
+    import json as _json
+    from t7 import agent_config
+    (tmp_path / '.mcp.json').write_text(_json.dumps({'mcpServers': {
+        'fs': {'command': 'npx', 'args': ['@modelcontextprotocol/server-filesystem', '/']},
+        'gh': {'command': 'npx', 'args': ['github-mcp@1.2.0'], 'env': {'GITHUB_TOKEN': 'ghp_literalvalue123', 'X': '${X}'}},
+        'remote': {'url': 'http://mcp.example.com/sse'},
+        'ok': {'command': 't7', 'args': ['mcp'], 'env': {'API_KEY': '${API_KEY}'}}}}, indent=1))
+    (tmp_path / '.claude').mkdir()
+    (tmp_path / '.claude' / 'settings.json').write_text(_json.dumps(
+        {'permissions': {'allow': ['Bash(*)'], 'defaultMode': 'bypassPermissions'}}))
+    sigs, areas = agent_config.scan_repo(tmp_path)
+    kinds = sorted({s['kind'] for s in sigs})
+    assert kinds == ['agent_bypass_permissions', 'agent_wildcard_tools', 'mcp_insecure_transport',
+                     'mcp_plaintext_secret', 'mcp_unbounded_fs', 'mcp_unpinned_server']
+    assert areas == {'agentic'}
+    assert all('ghp_literal' not in s['detail'] for s in sigs)        # never the secret itself
+    assert next(s for s in sigs if s['kind'] == 'mcp_plaintext_secret')['line'] > 1
+
+
+def test_tenancy_and_mcp_tool_signals():
+    from t7.gitops import ChangedFile, Hunk
+    from t7.signals import scan
+    f = ChangedFile('app/views.py', 'M', [Hunk(1, 2, [(3, 'org_id = request.GET["org_id"]'),
+                                                  (9, '@mcp.tool()')])])
+    sigs, areas = scan([f])
+    assert {'tenant_from_request', 'mcp_tool_exec'} <= {s['kind'] for s in sigs}
+    assert {'tenancy', 'agentic'} <= areas
+
+
+
+def test_check_and_hooks(tmp_path, monkeypatch, capsys):
+    import json as _json
+    import subprocess as sp
+    from t7 import cli, hooks
+    r = tmp_path / 'r'
+    r.mkdir()
+    def g(*a): sp.run(['git', '-c', 'user.email=t@t', '-c', 'user.name=t', *a], cwd=r, check=True, capture_output=True)
+    g('init', '-q'); (r / 'a.py').write_text('x = 1\n'); g('add', '-A'); g('commit', '-qm', 'i')
+    monkeypatch.chdir(r)
+    (r / 'a.py').write_text('x = 1\nAPI_KEY = "abcd1234efgh5678ijkl"\n')
+    assert hooks.check(agent=True) == 2                       # Claude Code gets told to fix it
+    assert 'secret in code' in capsys.readouterr().err
+    g('add', 'a.py')
+    assert hooks.check(staged=True) == 1                      # pre-commit blocks
+    (r / 'a.py').write_text('x = 2\n'); g('add', 'a.py')
+    assert hooks.check(staged=True) == 0
+    done = hooks.install()
+    assert any('pre-commit' in d for d in done) and any('Claude Code' in d for d in done)
+    assert 't7 check --staged' in (r / '.git' / 'hooks' / 'pre-commit').read_text()
+    st = _json.loads((r / '.claude' / 'settings.json').read_text())
+    assert st['hooks']['Stop'][0]['hooks'][0]['command'] == 't7 check --agent'
+    assert all('already' in d for d in hooks.install())       # idempotent
+    hooks.uninstall()
+    assert not (r / '.git' / 'hooks' / 'pre-commit').exists()

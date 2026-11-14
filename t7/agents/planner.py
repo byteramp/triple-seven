@@ -15,11 +15,16 @@ SPECIALISTS = {
     'llm': 'LLM/agent security (OWASP LLM Top-10 2025): prompt injection, excessive agency, output handling, data leakage',
     'iac': 'Infrastructure as code: exposure, IAM, encryption, network policy, container hardening',
     'secrets': 'Secrets, cryptography and sensitive-data handling (logging, storage, transport)',
-    'logic': 'Business logic & multi-tenant invariants: state machines, money, quotas, race conditions',
+    'logic': 'Business logic: state machines, money, quotas, race conditions',
+    'tenancy': 'Multi-tenant isolation: tenant from the session not the request, org scope on every query, '
+               'background jobs, caches, search and exports across tenants',
+    'agentic': 'Agent-built software & MCP: confused deputy, unbounded tool/MCP permissions, prompt injection '
+               'through tool definitions/results, token scope across chained agents, agent-introduced data flows',
 }
 
 AREA_TO_SPECIALIST = {'authz': 'authz', 'surface': 'authz', 'data': 'injection', 'input': 'injection',
-                      'llm': 'llm', 'iac': 'iac', 'secrets': 'secrets', 'crypto': 'secrets'}
+                      'llm': 'llm', 'iac': 'iac', 'secrets': 'secrets', 'crypto': 'secrets',
+                      'tenancy': 'tenancy', 'agentic': 'agentic'}
 
 SYSTEM = GROUND_RULES + (
     "\nYou are the PLANNER. Given a list of changed files with a short excerpt of added lines, "

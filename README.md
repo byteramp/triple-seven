@@ -68,6 +68,7 @@ canonical remote.
 | `t7 doctor` | check access, model, tests, editors |
 | `t7 scan [--all]` | review the change (or the whole repository) |
 | `t7 list` / `t7 fix ID` | fixes from the last scan / apply one |
+| `t7 check` / `t7 hooks install` | seconds-fast checkpoint without a model; pre-commit + Claude Code hook |
 | `t7 update` | update to the latest release (t7 reminds you once a day) |
 | `t7 logout` | remove the stored token for this repository |
 
@@ -100,6 +101,17 @@ Manual configuration (if you skipped it): `t7 editors --show`.
 | CI (`T7_TOKEN` secret) | 1 year | portal → Repositories → Renew; the portal warns 30 days ahead |
 
 An expired or revoked developer token: run `t7 setup` → *send me a new setup code*.
+
+## Checkpoint in the agent loop
+
+```bash
+t7 hooks install      # git pre-commit + Claude Code Stop hook (in .claude/settings.json)
+```
+
+Every commit — and every turn of Claude Code — gets a seconds-fast check without a model
+(`t7 check`): secrets, shell/deserialization sinks, tenant IDs from the request, and the
+repository's agent/MCP configuration. Blocking items stop the commit (or are handed back
+to the agent to fix); `t7 scan` remains the full review.
 
 ## Whole organisation (administrators)
 

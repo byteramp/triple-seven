@@ -24,7 +24,7 @@ from .agents.triage import TRIAGE_SYSTEM, _context, triage_all
 from .ci import ZERO, merges, push_context, set_github_status
 from .codeowners import CodeOwners
 from .api import APIError, Byteramp
-from . import policy as model_policy, updates
+from . import agent_config, policy as model_policy, updates
 from .access import AccessError, NOT_CONNECTED, REJECTED, UNREACHABLE, offline_allowed, renew_if_due
 from .config import Config
 from .context import detect
@@ -159,12 +159,16 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                 result['no_changes'] = True
             else:
                 signals, areas = scan(changed)
+                # MCP / agent settings: when they change, or on a full scan — not on every PR.
+                if base_sha == gitops.EMPTY_TREE or agent_config.touched(root, base_sha, include_worktree=not ci):
+                    cfg_signals, cfg_areas = agent_config.scan_repo(root)
+                    signals, areas = signals + cfg_signals, areas | cfg_areas
                 chain = plan(changed, areas, signals, profile, llm, tracer)
                 if run_id:
                     api.plan(run_id, chain)
 
                 delta = map_architecture(root, changed, signals, chain, llm, tracer,
-                                         gitops.numbered)
+                                         gitops.numbered, known=policy.get('architecture'))
                 hyps = []
                 if run_id:
                     with tracer.step('threat-model', 'Delta threat model (Airframe engine)') as s:

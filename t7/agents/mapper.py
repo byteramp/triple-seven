@@ -56,7 +56,7 @@ def _clean(delta):
     return {'components': comps, 'flows': flows}
 
 
-def map_architecture(root, changed, signals, chain, llm, tracer, read):
+def map_architecture(root, changed, signals, chain, llm, tracer, read, known=None):
     with tracer.step('mapper', 'Map the architecture delta') as h:
         focus = set(chain['focus_files'])
         files = sorted([f for f in changed if f.added],
@@ -65,7 +65,15 @@ def map_architecture(root, changed, signals, chain, llm, tracer, read):
         for f in files:
             body = read(root, f.path)[:5000]
             parts.append(f'## {f.path} (status {f.status})\n{body}')
-        data = llm.json('map', SYSTEM, '\n\n'.join(parts)[:60000], default={}) or {}
+        system = SYSTEM
+        if known and known.get('components'):
+            # Threat-model aware: reuse the living model's names so the organisation's model stays
+            # coherent; anything not in this list is new ("change": "added").
+            names = '; '.join(f"{c['name']} ({c.get('kind')}, {c.get('trust_zone')})"
+                              for c in known['components'] if c.get('name'))[:4000]
+            system += ('\nKnown components of this system (use these exact names when the code refers '
+                       f'to them; mark components not in this list as "added"): {names}')
+        data = llm.json('map', system, '\n\n'.join(parts)[:60000], default={}) or {}
         delta = _clean(data)
         # Signals: kind + location only (no code) feed the threat model's code rules.
         delta['signals'] = [{'kind': s['kind'], 'file': s['file'], 'line': s['line'],

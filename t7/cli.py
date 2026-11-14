@@ -5,6 +5,8 @@
   t7 status                     what this machine is connected to
   t7 update                     update t7 to the latest release
   t7 rollout ORG                administrators: Triple Seven for a whole GitHub organisation
+  t7 check [--staged|--agent]   seconds-fast check without a model (hooks)
+  t7 hooks install              git pre-commit + Claude Code Stop hook
   t7 scan [--base REF] [--no-fix] [--ci] [--json] [--quiet]
   t7 fix  <SEC-REQ-ID>          apply a verified fix (and its regression test) locally
   t7 list                       fixes available from the last local scan
@@ -484,6 +486,19 @@ def cmd_update(a):
     return 0
 
 
+def cmd_hooks(a):
+    from . import hooks
+    if a.action == 'uninstall':
+        hooks.uninstall()
+        print('Triple Seven hooks removed.')
+        return 0
+    for line in hooks.install(git=not a.no_git, claude=not a.no_claude):
+        print(f'✓ {line}')
+    print('Every commit (and every Claude Code turn) now gets a seconds-fast check; `t7 scan` stays the '
+          'full review.')
+    return 0
+
+
 def cmd_logout(a):
     root = None if a.default else _root_or_none()
     credentials.remove(root)
@@ -510,6 +525,15 @@ def main(argv=None):
     ed.set_defaults(fn=cmd_editors)
     sub.add_parser('status', help='what this machine is connected to').set_defaults(fn=cmd_status)
     sub.add_parser('update', help='update t7 to the latest release').set_defaults(fn=cmd_update)
+    ck = sub.add_parser('check', help='seconds-fast security check without a model (pre-commit / agent hook)')
+    ck.add_argument('--staged', action='store_true', help='only what is staged for commit')
+    ck.add_argument('--agent', action='store_true', help='AI-agent hook mode (exit 2 = tell the agent to fix)')
+    ck.set_defaults(fn=lambda a: __import__('t7.hooks', fromlist=['check']).check(staged=a.staged, agent=a.agent))
+    hk = sub.add_parser('hooks', help='install the checkpoint: git pre-commit + Claude Code Stop hook')
+    hk.add_argument('action', choices=['install', 'uninstall'])
+    hk.add_argument('--no-git', action='store_true')
+    hk.add_argument('--no-claude', action='store_true')
+    hk.set_defaults(fn=cmd_hooks)
     ro = sub.add_parser('rollout', help='administrators: switch Triple Seven on for a whole GitHub organisation')
     ro.add_argument('org', help='GitHub organisation')
     ro.add_argument('--repos', help='only these repositories (comma-separated)')
