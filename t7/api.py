@@ -25,15 +25,24 @@ class Byteramp:
     def __init__(self, cfg):
         self.cfg = cfg
 
+    def _headers(self):
+        h = {'Authorization': f'Bearer {self.cfg.token}', 'Content-Type': 'application/json',
+             'User-Agent': f't7-agent/{__version__}'}
+        # Organisation tokens: which repository this call is about (the remote URL, not code).
+        from urllib.parse import quote
+        if getattr(self.cfg, 'remote', ''):
+            h['X-T7-Remote'] = quote(self.cfg.remote[:500], safe=':/@.~')
+        if getattr(self.cfg, 'repo_name', ''):
+            h['X-T7-Repo-Name'] = quote(self.cfg.repo_name[:120], safe='')
+        return h
+
     def _req(self, method, path, body=None, timeout=60):
         if self.cfg.offline:
             raise APIError(0, 'offline (no T7_TOKEN)')
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(
             f'{self.cfg.api_url}/tripleseven/agent/{path}', data=data, method=method,
-            headers={'Authorization': f'Bearer {self.cfg.token}',
-                     'Content-Type': 'application/json',
-                     'User-Agent': f't7-agent/{__version__}'})
+            headers=self._headers())
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 raw = r.read()

@@ -413,7 +413,8 @@ def test_setup_verifies_before_storing(repo, monkeypatch, capsys):
     def deny(self):
         raise APIError(401, 'Invalid token')
     monkeypatch.setattr(Byteramp, 'config', deny)
-    args = type('A', (), {'default': False, 'api_url': None, 'token': True, 'no_editors': True, 'yes': False})()
+    args = type('A', (), {'default': False, 'api_url': None, 'token': True, 'no_editors': True, 'yes': False,
+                          'code': False, 'email': None, 'browser': False})()
     assert cli.cmd_setup(args) == 1
     assert credentials.lookup(repo) == (None, None)
     monkeypatch.setattr(cli, '_read_token', lambda: 't7_good')
@@ -457,7 +458,8 @@ def test_browser_sign_in_stores_token_and_registers_editors(repo, monkeypatch, c
     monkeypatch.setattr('time.sleep', lambda s: None)
     registered = []
     monkeypatch.setattr('t7.editors.detect', lambda: [('VS Code', lambda: registered.append(1) or ('VS Code', 'added', 'x'))])
-    args = type('A', (), {'default': False, 'api_url': None, 'token': False, 'no_editors': False, 'yes': True})()
+    args = type('A', (), {'default': False, 'api_url': None, 'token': False, 'no_editors': False, 'yes': True,
+                          'code': False, 'email': None, 'browser': True})()
     assert cli.cmd_setup(args) == 0
     key, entry = credentials.lookup(repo)
     assert entry['token'] == 't7_fromdevice' and entry['api_url'] == 'https://t7.byteramp.se/api'
@@ -523,10 +525,46 @@ def test_setup_in_new_project_folder_offers_git_init(tmp_path, monkeypatch):
     monkeypatch.chdir(proj)
     monkeypatch.setattr(cli, '_browser_sign_in', lambda api, root: {
         'token': 't7_x', 'repository': 'Felicia', 'kind': 'developer', 'expires_at': None})
-    args = type('A', (), {'default': False, 'api_url': None, 'token': False, 'no_editors': True, 'yes': True})()
+    args = type('A', (), {'default': False, 'api_url': None, 'token': False, 'no_editors': True, 'yes': True,
+                          'code': False, 'email': None, 'browser': True})()
     assert cli.cmd_setup(args) == 0
     assert (proj / '.git').is_dir()
     # Never in the home directory.
     monkeypatch.setattr('pathlib.Path.home', lambda: tmp_path)
     monkeypatch.chdir(tmp_path)
     assert cli._offer_git_init(assume_yes=True) is None and not (tmp_path / '.git').exists()
+
+
+def test_setup_code_connects_the_machine_for_every_repository(repo, monkeypatch, capsys):
+    from t7 import cli, credentials
+    from t7.api import Byteramp
+    from t7.config import Config
+    seen = {}
+
+    def fake_public(api_url, path, body, timeout=30):
+        seen[path] = body
+        return {'token': 't7_org', 'organization': 'Acme AB', 'email': body['email'], 'kind': 'developer',
+                'expires_at': '2099-01-01T00:00:00Z'}
+    monkeypatch.setattr(Byteramp, 'public', staticmethod(fake_public))
+    answers = iter(['BCDF-GHJK'])
+    monkeypatch.setattr('builtins.input', lambda prompt='': next(answers))
+    args = type('A', (), {'default': False, 'api_url': None, 'token': False, 'no_editors': True, 'yes': True,
+                          'code': True, 'email': 'anna@acme.se', 'browser': False})()
+    assert cli.cmd_setup(args) == 0
+    assert seen['enroll/']['code'] == 'BCDF-GHJK' and seen['enroll/']['email'] == 'anna@acme.se'
+    key, entry = credentials.lookup(None)
+    assert key is None and entry['token'] == 't7_org'          # machine-wide, not per repository
+    assert Config.load(repo).token == 't7_org'                  # …so every repository uses it
+    assert 't7_org' not in capsys.readouterr().out
+
+
+def test_agent_sends_remote_without_credentials(repo, monkeypatch):
+    import subprocess as sp
+    from t7.api import Byteramp
+    from t7.config import Config
+    sp.run(['git', 'remote', 'add', 'origin', 'https://anna:ghp_secret@github.com/Acme/Shop.git'], cwd=repo, check=True)
+    cfg = Config.load(repo)
+    h = Byteramp(cfg)._headers()
+    assert h['X-T7-Remote'] == 'https://github.com/Acme/Shop.git'
+    assert 'ghp_secret' not in str(h)
+    assert h['X-T7-Repo-Name'] == 'repo'

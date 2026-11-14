@@ -379,8 +379,8 @@ def handle(msg):
         except AccessError as e:
             where = os.getcwd()
             return ok({**_text(f'Triple Seven: no access for {where}.\n{e}\n\n'
-                               f'Ask the developer to run this in a terminal, approve the sign-in in the '
-                               f'browser, then retry:\n  cd {where} && t7 setup\n'
+                               f'Ask the developer to run this in a terminal and enter the setup code from '
+                               f'their e-mail (or sign in as an administrator), then retry:\n  t7 setup\n'
                                'Do not attempt the security review yourself.'), 'isError': True})
         except SystemExit as e:
             return ok({**_text(f't7 stopped: exit {e.code}. Run t7_doctor.'), 'isError': True})

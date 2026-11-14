@@ -41,6 +41,8 @@ class Config:
     token_key: str = None        # where a `t7 setup` token is stored (repo path, None = default)
     token_expires_at: str = ''
     token_kind: str = ''
+    remote: str = ''             # git remote of this repository (sent so organisation tokens
+    repo_name: str = ''          # map the call to a repository); folder name as fallback
 
     @classmethod
     def load(cls, root):
@@ -72,6 +74,8 @@ class Config:
         c.max_fix_attempts = int(env.get('T7_MAX_FIX_ATTEMPTS', c.max_fix_attempts))
         c.parallel = int(env.get('T7_PARALLEL', c.parallel))
         c.step_timeout = int(env.get('T7_STEP_TIMEOUT', c.step_timeout))
+        if root:
+            c.remote, c.repo_name = _remote(root), Path(root).name
         c.offline = not c.token
         if c.llm == 'client':
             c.parallel = 1     # one sampling request at a time over the editor's channel
@@ -85,3 +89,25 @@ class Config:
         if self.llm == 'ollama':
             return 'local'
         return 'byo'
+
+
+def _remote(root):
+    """origin's URL (or the first remote's). Only the URL is sent, never code."""
+    import subprocess
+    try:
+        out = subprocess.run(['git', 'remote'], cwd=root, capture_output=True, text=True, timeout=10).stdout.split()
+        if not out:
+            return ''
+        name = 'origin' if 'origin' in out else out[0]
+        url = subprocess.run(['git', 'remote', 'get-url', name], cwd=root, capture_output=True, text=True,
+                             timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ''
+    return strip_credentials(url)
+
+
+def strip_credentials(url):
+    """https://user:token@host/x → https://host/x (a token in a remote URL never leaves)."""
+    import re
+    return re.sub(r'^([a-z][a-z0-9+.-]*://)[^/@]*@', r'\1', url, flags=re.I)
+

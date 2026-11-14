@@ -20,17 +20,23 @@ cd path/to/your-repository
 t7 setup
 ```
 
-`t7 setup` does everything once:
+`t7 setup` does everything once per machine:
 
-1. **Signs you in through the browser.** It shows a code and opens the portal;
-   approve it there (portal login), or enter the code on the invitation e-mail
-   your team sent you. No token to copy.
-2. **Stores a personal token for this repository** in
-   `~/.config/t7/credentials.json` (mode 0600). It is valid for 90 days and
-   **renews itself** while your organization's subscription is active.
+1. **Connects you to your organisation.** Developers choose *"I have a setup code"*
+   and enter their work e-mail and the code their organisation e-mailed them (valid
+   4 hours, once — *"send me a new setup code"* if it expired). No Triple Seven
+   account needed. Administrators can instead sign in with their portal account
+   in the browser.
+2. **Stores one personal token for this machine** in
+   `~/.config/t7/credentials.json` (mode 0600). It works in **every repository of
+   the organisation** — the repository of each review is recognised from its git
+   remote (only the URL, credentials stripped). Valid for 90 days and **renews
+   itself** while you are on the organisation's roster and the subscription is
+   active.
 3. **Adds Triple Seven to your editors / AI assistants** — VS Code (GitHub
-   Copilot agent mode), Cursor, Windsurf, Claude Code, Codex — user-wide, so it
-   works in every repository. No token is written into any editor config.
+   Copilot agent mode), Cursor, Windsurf, Claude Code, Codex — user-wide. No token
+   is written into any editor config. In a new project folder without git it
+   offers `git init`.
 
 Then:
 
@@ -41,16 +47,24 @@ t7 fix SEC-REQ-SHOP-004                # apply a verified fix and its regression
 
 …or ask your assistant: *"review my change with Triple Seven"*.
 
-Every other repository: `cd` into it and run `t7 setup` again (one click in the
-browser). An active Triple Seven subscription is required for every review — in
-the terminal, the IDE and CI.
+A repository your organisation has not set up yet still works: it appears as
+*discovered* for your administrator. An active subscription is required for
+every review — in the terminal, the IDE and CI.
+
+### For administrators
+
+Add your developers' e-mail addresses in the portal (Triple Seven → Developers,
+one or two thousand, paste or CSV). Each gets a personal setup code by e-mail.
+Removing someone revokes their tokens immediately. Connect CI per repository
+(Repositories → Connect); CI runs also teach Triple Seven each repository's
+canonical remote.
 
 | Command | |
 |---|---|
 | `t7` | welcome and next step |
-| `t7 setup` | connect this repository (browser sign-in) and your editors; `--token` to paste a token instead |
+| `t7 setup` | connect this machine (setup code, or `--browser` for administrators) and your editors; `--code --email you@co.se` non-interactive; `--token` to paste a repository token |
 | `t7 editors` | add Triple Seven to the editors on this machine; `--show` prints the configs |
-| `t7 status` | repositories connected on this machine and token lifetime |
+| `t7 status` | what this machine is connected to and token lifetime |
 | `t7 doctor` | check access, model, tests, editors |
 | `t7 scan [--all]` | review the change (or the whole repository) |
 | `t7 list` / `t7 fix ID` | fixes from the last scan / apply one |
@@ -76,10 +90,10 @@ Manual configuration (if you skipped it): `t7 editors --show`.
 
 | Token | Lifetime | Renewal |
 |---|---|---|
-| Developer (`t7 setup`) | 90 days | automatic, by `t7`, while the subscription is active |
+| Developer (`t7 setup`) | 90 days | automatic, by `t7`, while you are on the roster and the subscription is active |
 | CI (`T7_TOKEN` secret) | 1 year | portal → Repositories → Renew; the portal warns 30 days ahead |
 
-An expired or revoked developer token: run `t7 setup` again.
+An expired or revoked developer token: run `t7 setup` → *send me a new setup code*.
 
 ## GitHub Actions
 

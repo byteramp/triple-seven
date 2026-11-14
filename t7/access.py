@@ -15,20 +15,22 @@ WELCOME = """Triple Seven · Byteramp
 Agent installed. Connect your account to get started.
 An active Triple Seven subscription is required.
 
-In the repository you want to review, run:
+Run:
   t7 setup
 
-It signs you in through your browser (portal login, or the invitation
-e-mail from your team) and adds Triple Seven to your editors — once.
+Developers: enter your work e-mail and the setup code your organisation
+e-mailed you (no Triple Seven account needed). Administrators: sign in
+with your portal account. Either way it connects this machine and adds
+Triple Seven to your editors — once.
 
 Need access?
   Contact your organization's Triple Seven administrator."""
 
-NOT_CONNECTED = ("This repository is not connected to Triple Seven. Run `t7 setup` inside it to sign in "
-                 "through the browser (an active subscription is required). In CI, set T7_TOKEN.")
+NOT_CONNECTED = ("This machine is not connected to Triple Seven. Run `t7 setup` and enter the setup code "
+                 "from your organisation's e-mail (or sign in as an administrator). In CI, set T7_TOKEN.")
 
-REJECTED = ("Access was not accepted ({detail}). If the token expired or was revoked, run `t7 setup` to "
-            "sign in again. If the subscription is inactive, contact your Triple Seven administrator.")
+REJECTED = ("Access was not accepted ({detail}). If the token expired or was revoked, run `t7 setup` "
+            "(→ send me a new setup code). Otherwise contact your Triple Seven administrator.")
 
 UNREACHABLE = ("Cannot reach Triple Seven at {url} ({detail}). Access is checked on every run, so the "
                "review did not start. Check your network or T7_API_URL and try again.")

@@ -147,12 +147,19 @@ def cmd_doctor(a):
     except APIError as e:
         print(f'access       FAILED: {e.detail or e.status}')
         return 1
-    llm, tok = pol['llm'], pol.get('token') or {}
-    print(f"repository   {pol['repository']['full_name']}")
+    llm, tok = pol.get('llm') or {}, pol.get('token') or {}
+    if pol.get('organization'):
+        print(f"organisation {pol['organization']}")
     print(f"access       active · {tok.get('kind', '?')} token, {_expiry(tok.get('expires_at')) or 'no expiry'}")
-    print(f"byteramp LLM {'enabled (opt-in recorded)' if llm['byteramp_allowed'] else 'not enabled'}")
-    if cfg.llm == 'byteramp' and not llm['byteramp_allowed']:
-        print('  → opt in under Triple Seven → Repositories, or set T7_LLM to your own provider.')
+    if not pol.get('repository'):
+        print('repository   — (run t7 doctor inside a repository to see how it maps)')
+        return 0
+    print(f"repository   {pol['repository']['full_name']}"
+          + ('  (new: listed as discovered for your administrator)' if pol.get('discovered') else ''))
+    print(f"byteramp LLM {'enabled (opt-in recorded)' if llm.get('byteramp_allowed') else 'not enabled'}")
+    if cfg.llm == 'byteramp' and not llm.get('byteramp_allowed'):
+        print('  → ask your administrator to enable Byteramp models for this repository, use VS Code +')
+        print('    Copilot (your own model), or set T7_LLM to your own provider.')
     return 0
 
 
@@ -260,14 +267,15 @@ def _register_editors(assume_yes=False):
     print('  Restart open editors (or reload the window) to pick it up.')
 
 
-def _offer_git_init(assume_yes=False):
+def _offer_git_init(assume_yes=False, quiet_home=False):
     """New project folder (vibe-coding): Triple Seven reviews what git tracks, so offer to
     start a repository here. Never in the home directory or the filesystem root."""
     from pathlib import Path
     here = Path.cwd().resolve()
     if here in (Path.home().resolve(), Path(here.anchor)):
-        print('Run t7 setup inside your project folder, not in your home directory:')
-        print('  cd path/to/your-project && t7 setup\n')
+        if not quiet_home:
+            print('Run t7 setup inside your project folder, not in your home directory:')
+            print('  cd path/to/your-project && t7 setup\n')
         return None
     print(f'{here.name} is not a git repository yet. Triple Seven reviews the changes git tracks')
     print('(nothing needs to be committed or pushed).')
@@ -282,20 +290,119 @@ def _offer_git_init(assume_yes=False):
     return gitops.repo_root(str(here))
 
 
+def _ask(prompt):
+    try:
+        return input(prompt).strip()
+    except EOFError:
+        return ''
+
+
+def _choose_mode(a):
+    if a.code or a.email:
+        return 'code'
+    if a.browser:
+        return 'browser'
+    if a.token:
+        return 'token'
+    if not sys.stdin.isatty():
+        return 'code'
+    print('How do you want to connect?')
+    print('  1) I have a setup code from an e-mail        (developers)')
+    print('  2) Sign in with my portal account (browser)  (administrators)')
+    print('  3) Send me a new setup code')
+    choice = _ask('Choose 1, 2 or 3 [1]: ') or '1'
+    return {'1': 'code', '2': 'browser', '3': 'new-code'}.get(choice, 'code')
+
+
+def _code_sign_in(api_url, email=''):
+    """E-mail + one-time code → a personal organisation token for this machine."""
+    import platform
+    from .api import APIError, Byteramp
+    email = email or _ask('Your work e-mail: ')
+    if not email:
+        return None
+    for attempt in range(3):
+        code = _ask('Setup code from the e-mail (XXXX-XXXX): ')
+        if not code:
+            return None
+        try:
+            return Byteramp.public(api_url, 'enroll/', {'email': email, 'code': code,
+                                                        'hostname': platform.node()[:100]})
+        except APIError as e:
+            if e.status == 0:
+                print(f'Cannot reach {api_url} ({e.detail}).', file=sys.stderr)
+                return None
+            print(f'  {e.detail or e.status}', file=sys.stderr)
+            if e.status == 403:
+                return None
+    print('Request a new code with `t7 setup` → 3.', file=sys.stderr)
+    return None
+
+
+def _request_code(api_url, email=''):
+    from .api import APIError, Byteramp
+    email = email or _ask('Your work e-mail: ')
+    if not email:
+        return ''
+    try:
+        r = Byteramp.public(api_url, 'enroll/request/', {'email': email})
+        print(r.get('detail') or 'If this e-mail is registered, a new code is on its way.')
+    except APIError as e:
+        print(f'Could not request a code ({e.detail or e.status}).', file=sys.stderr)
+        return ''
+    return email
+
+
+def _finish(a):
+    if not a.no_editors:
+        _register_editors(a.yes)
+    print('\nYou are set. Next:')
+    print('  t7 scan                review your current change (branch + uncommitted work)')
+    print('  t7 scan --all          review the whole repository')
+    print('  In your editor\'s AI chat: "review my change with Triple Seven"')
+    return 0
+
+
 def cmd_setup(a):
     from . import access
-    root = None if a.default else _root_or_none()
     print(access.WELCOME.split('\n')[0] + ' — setup\n')
+    root = _root_or_none()
+    api_url = (a.api_url or Config.load(root).api_url).rstrip('/')
+    mode = _choose_mode(a)
+
+    if mode in ('code', 'new-code'):
+        email = a.email or ''
+        if mode == 'new-code':
+            email = _request_code(api_url, email)
+            if not email:
+                return 1
+            print('Enter it below when it arrives (valid 4 hours).\n')
+        got = _code_sign_in(api_url, email)
+        if not got:
+            return 1
+        # Machine-wide: one organisation token serves every repository of the organisation.
+        credentials.store(got['token'], api_url, got.get('organization', ''), None,
+                          expires_at=got.get('expires_at'), kind='developer', email=got.get('email') or '')
+        print(f"\n✓ This machine is connected to {got.get('organization')} as {got.get('email')}.")
+        print('  Works in every repository of the organisation — no setup per repository.')
+        exp = _expiry(got.get('expires_at'))
+        print(f'  Token stored in {credentials.path()} (only readable by you){" · " + exp if exp else ""}.')
+        if os.environ.get('T7_TOKEN'):
+            print('  Note: T7_TOKEN is set in this shell and takes precedence over the stored token.')
+        if root is None:
+            _offer_git_init(a.yes, quiet_home=True)
+        return _finish(a)
+
+    # Browser sign-in / pasted token: tied to one repository (administrators, single repos).
     if root is None and not a.default:
         root = _offer_git_init(a.yes)
         if root is None:
             _register_editors(a.yes)
             return 1
     cfg = Config.load(root)
-    if a.api_url:
-        cfg.api_url = a.api_url.rstrip('/')
+    cfg.api_url = api_url
     print(f'Repository: {root}\n' if root else 'Storing a default token for all repositories.\n')
-    got = _paste_token(cfg) if a.token else _browser_sign_in(cfg.api_url, root)
+    got = _paste_token(cfg) if mode == 'token' else _browser_sign_in(cfg.api_url, root)
     if not got:
         return 1
     # Store the URL this sign-in actually used (it worked), not the server's public hint.
@@ -307,13 +414,7 @@ def cmd_setup(a):
     print(f'  Token stored in {credentials.path()} (only readable by you){" · " + exp if exp else ""}.')
     if os.environ.get('T7_TOKEN'):
         print('  Note: T7_TOKEN is set in this shell and takes precedence over the stored token.')
-    if not a.no_editors:
-        _register_editors(a.yes)
-    print('\nYou are set. Next:')
-    print('  t7 scan                review your current change (branch + uncommitted work)')
-    print('  t7 scan --all          review the whole repository')
-    print('  In your editor\'s AI chat: "review my change with Triple Seven"')
-    return 0
+    return _finish(a)
 
 
 def cmd_editors(a):
@@ -332,7 +433,8 @@ def cmd_status(a):
         print('No repositories connected on this machine. Run `t7 setup` inside a repository.')
         return 0
     for key, e in rows:
-        print(f"{e.get('repository', '?'):<40} {key}\n    {_expiry(e.get('expires_at')) or 'expiry unknown'}")
+        where = 'all repositories of the organisation' if key == '(default)' else key
+        print(f"{e.get('repository', '?'):<40} {where}\n    {_expiry(e.get('expires_at')) or 'expiry unknown'}")
     return 0
 
 
@@ -348,7 +450,10 @@ def main(argv=None):
     p.add_argument('--version', action='version', version=f't7 {__version__}')
     sub = p.add_subparsers(dest='cmd')
     su = sub.add_parser('setup', help='connect this repository (browser sign-in) and your editors')
-    su.add_argument('--token', action='store_true', help='paste a token instead of signing in in the browser')
+    su.add_argument('--code', action='store_true', help='use the setup code from your e-mail (developers)')
+    su.add_argument('--email', help='your work e-mail (with --code)')
+    su.add_argument('--browser', action='store_true', help='sign in with a portal account in the browser')
+    su.add_argument('--token', action='store_true', help='paste a repository token')
     su.add_argument('--default', action='store_true', help='store as default for all repositories')
     su.add_argument('--no-editors', action='store_true', help='do not offer to register editors')
     su.add_argument('--yes', '-y', action='store_true', help='register editors without asking')
