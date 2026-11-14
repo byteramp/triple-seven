@@ -100,6 +100,11 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                 if fresh.token and fresh.token != cfg.token:
                     cfg.token = fresh.token
                     return scan_repo(base=base, fix=fix, ci=ci, quiet=quiet, enrich=enrich, client=client)
+            if e.status == 403 and 'Byteramp models' in str(e.detail):
+                raise AccessError('Byteramp models are not enabled for this repository yet. Your administrator '
+                                  'can enable them (portal → Repositories, per repository or for all). '
+                                  'Meanwhile: use VS Code + Copilot (your own model), or set T7_LLM to your own '
+                                  'provider (ollama / openai / azure / anthropic).') from None
             if e.status in (401, 402, 403):
                 raise AccessError(REJECTED.format(detail=e.detail or e.status)) from None
             raise AccessError(UNREACHABLE.format(url=cfg.api_url, detail=e.detail or e.status)) from None

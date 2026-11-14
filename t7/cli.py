@@ -119,6 +119,20 @@ def _expiry(cfg_or_entry_expires):
     return f'valid {round(left)} more days (renews automatically)' if left > 1 else 'expires today'
 
 
+def _shadow_warning(root=None):
+    """T7_TOKEN in the shell silently overrides the machine's `t7 setup` sign-in."""
+    if not os.environ.get('T7_TOKEN'):
+        return ''
+    _, stored = credentials.lookup(root)
+    if not stored:
+        return ''
+    rc = '~/.zshrc' if 'zsh' in os.environ.get('SHELL', '') else '~/.bashrc'
+    return ('\n⚠ T7_TOKEN is set in this shell and OVERRIDES your t7 setup sign-in.\n'
+            f'  Remove the `export T7_TOKEN=…` line from {rc} (or your password-manager setup), then run:\n'
+            '    unset T7_TOKEN T7_API_URL\n'
+            '  T7_TOKEN is only for CI pipelines.')
+
+
 def cmd_doctor(a):
     root = _root_or_none()
     cfg = Config.load(root)
@@ -139,8 +153,11 @@ def cmd_doctor(a):
     eds = [label for label, _ in editors.detect()]
     print(f"editors      {', '.join(eds) if eds else 'none detected'}  (t7 editors to add Triple Seven)")
     if not cfg.token:
-        print('\nRun `t7 setup` in the repository to connect. An active Triple Seven subscription is required.')
+        print('\nRun `t7 setup` to connect. An active Triple Seven subscription is required.')
         return 1
+    shadow = _shadow_warning(root)
+    if shadow:
+        print(shadow + '\n')
     from .api import APIError, Byteramp
     try:
         pol = Byteramp(cfg).config()
@@ -158,8 +175,9 @@ def cmd_doctor(a):
           + ('  (new: listed as discovered for your administrator)' if pol.get('discovered') else ''))
     print(f"byteramp LLM {'enabled (opt-in recorded)' if llm.get('byteramp_allowed') else 'not enabled'}")
     if cfg.llm == 'byteramp' and not llm.get('byteramp_allowed'):
-        print('  → ask your administrator to enable Byteramp models for this repository, use VS Code +')
-        print('    Copilot (your own model), or set T7_LLM to your own provider.')
+        print('  → your administrator can enable Byteramp models for this repository or for all')
+        print('    repositories (portal → Repositories); meanwhile use VS Code + Copilot (your own')
+        print('    model), or set T7_LLM to your own provider.')
     return 0
 
 
@@ -388,7 +406,7 @@ def cmd_setup(a):
         exp = _expiry(got.get('expires_at'))
         print(f'  Token stored in {credentials.path()} (only readable by you){" · " + exp if exp else ""}.')
         if os.environ.get('T7_TOKEN'):
-            print('  Note: T7_TOKEN is set in this shell and takes precedence over the stored token.')
+            print(_shadow_warning(None) or '  Note: T7_TOKEN is set in this shell and takes precedence.')
         if root is None:
             _offer_git_init(a.yes, quiet_home=True)
         return _finish(a)
@@ -413,7 +431,7 @@ def cmd_setup(a):
     exp = _expiry(got.get('expires_at'))
     print(f'  Token stored in {credentials.path()} (only readable by you){" · " + exp if exp else ""}.')
     if os.environ.get('T7_TOKEN'):
-        print('  Note: T7_TOKEN is set in this shell and takes precedence over the stored token.')
+        print(_shadow_warning(root) or '  Note: T7_TOKEN is set in this shell and takes precedence.')
     return _finish(a)
 
 

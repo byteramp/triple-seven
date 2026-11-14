@@ -568,3 +568,16 @@ def test_agent_sends_remote_without_credentials(repo, monkeypatch):
     assert h['X-T7-Remote'] == 'https://github.com/Acme/Shop.git'
     assert 'ghp_secret' not in str(h)
     assert h['X-T7-Repo-Name'] == 'repo'
+
+
+def test_doctor_warns_when_t7_token_shadows_the_sign_in(repo, monkeypatch, capsys):
+    from t7 import cli, credentials
+    from t7.api import Byteramp
+    credentials.store('t7_machine', 'https://t7.example/api', 'Acme', None, kind='developer')
+    monkeypatch.setenv('T7_TOKEN', 't7_old_repo_token')
+    monkeypatch.setattr('t7.editors.detect', lambda: [])
+    monkeypatch.setattr(Byteramp, 'config', lambda self: {'repository': {'full_name': 'dev/CLI'},
+                                                          'llm': {'byteramp_allowed': True}, 'token': {}})
+    cli.cmd_doctor(None)
+    out = capsys.readouterr().out
+    assert 'OVERRIDES your t7 setup sign-in' in out and 'unset T7_TOKEN' in out
