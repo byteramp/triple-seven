@@ -4,6 +4,7 @@
   t7 editors                    add Triple Seven to your editors / AI assistants (once)
   t7 status                     what this machine is connected to
   t7 update                     update t7 to the latest release
+  t7 rollout ORG                administrators: Triple Seven for a whole GitHub organisation
   t7 scan [--base REF] [--no-fix] [--ci] [--json] [--quiet]
   t7 fix  <SEC-REQ-ID>          apply a verified fix (and its regression test) locally
   t7 list                       fixes available from the last local scan
@@ -110,14 +111,15 @@ def _root_or_none():
         return None
 
 
-def _expiry(cfg_or_entry_expires):
+def _expiry(cfg_or_entry_expires, kind='developer'):
     from .access import days_left
     left = days_left(cfg_or_entry_expires)
     if left is None:
         return ''
     if left <= 0:
         return 'expired'
-    return f'valid {round(left)} more days (renews automatically)' if left > 1 else 'expires today'
+    how = 'renews automatically' if kind == 'developer' else 'renew in the portal'
+    return f'valid {round(left)} more days ({how})' if left > 1 else 'expires today'
 
 
 def _shadow_warning(root=None):
@@ -174,7 +176,7 @@ def cmd_doctor(a):
         print(f'update       {note}')
     if pol.get('organization'):
         print(f"organisation {pol['organization']}")
-    print(f"access       active · {tok.get('kind', '?')} token, {_expiry(tok.get('expires_at')) or 'no expiry'}")
+    print(f"access       active · {tok.get('kind', '?')} token, {_expiry(tok.get('expires_at'), tok.get('kind', 'developer')) or 'no expiry'}")
     if not pol.get('repository'):
         print('repository   — (run t7 doctor inside a repository to see how it maps)')
         return 0
@@ -508,6 +510,15 @@ def main(argv=None):
     ed.set_defaults(fn=cmd_editors)
     sub.add_parser('status', help='what this machine is connected to').set_defaults(fn=cmd_status)
     sub.add_parser('update', help='update t7 to the latest release').set_defaults(fn=cmd_update)
+    ro = sub.add_parser('rollout', help='administrators: switch Triple Seven on for a whole GitHub organisation')
+    ro.add_argument('org', help='GitHub organisation')
+    ro.add_argument('--repos', help='only these repositories (comma-separated)')
+    ro.add_argument('--all', action='store_true', help='all repositories, without asking')
+    ro.add_argument('--skip-secret', action='store_true', help='the organisation secret T7_TOKEN is already set')
+    ro.add_argument('--require-check', action='store_true', help='also require the "Triple Seven" status to merge')
+    ro.add_argument('--dry-run', action='store_true', help='show what would happen')
+    ro.add_argument('--api-url', help='API base URL (only if not https://t7.byteramp.se/api)')
+    ro.set_defaults(fn=lambda a: __import__('t7.rollout', fromlist=['run']).run(a))
     lo = sub.add_parser('logout', help='remove the stored token for this repository')
     lo.add_argument('--default', action='store_true')
     lo.set_defaults(fn=cmd_logout)

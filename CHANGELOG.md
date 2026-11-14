@@ -2,6 +2,16 @@
 
 Update with `t7 update`. t7 reminds you (at most once a day) when a new version is out.
 
+## 0.6.0
+- **`t7 rollout ORG`** (administrators): switches Triple Seven on for a whole GitHub
+  organisation with your own `gh` login — sets the organisation secret `T7_TOKEN`, opens a
+  pull request with the workflow in each repository you choose, and with `--require-check`
+  adds a ruleset requiring the "Triple Seven" status. Byteramp gets no access. `--dry-run`,
+  `--repos a,b`, `--all`.
+- Works with the new **organisation CI token**: one secret for every repository; each run
+  is matched to its repository by the git remote.
+- CI templates install the newest 0.x agent instead of a pinned old version.
+
 ## 0.5.0
 - **Use the AI you are already signed in to — no API key.** t7 can run your signed-in
   Claude Code, Codex, Gemini CLI or GitHub Copilot CLI for its analysis (in an empty

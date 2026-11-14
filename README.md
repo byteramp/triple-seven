@@ -101,6 +101,20 @@ Manual configuration (if you skipped it): `t7 editors --show`.
 
 An expired or revoked developer token: run `t7 setup` → *send me a new setup code*.
 
+## Whole organisation (administrators)
+
+Create an **organisation CI token** in the portal (Triple Seven → CI / CD) — one secret for
+every repository; each run is matched to its repository by its git remote. Then:
+
+```bash
+gh auth login                         # organisation owner
+t7 rollout your-org --dry-run         # see what would happen
+t7 rollout your-org --require-check   # secret + a PR per repository + merge rule
+```
+
+GitLab: set `T7_TOKEN` as a group CI/CD variable and `include:` the template below in
+each project (or in a pipeline execution policy). Details per platform: portal → CI / CD.
+
 ## GitHub Actions
 
 ```yaml

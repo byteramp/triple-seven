@@ -674,3 +674,43 @@ def test_signed_in_assistant_cli_is_used_without_a_key(tmp_path, monkeypatch):
     monkeypatch.setenv('T7_LLM', 'claude-cli')
     c = Config.load(None)
     assert (c.llm, c.assistant) == ('assistant', 'claude')
+
+
+
+def test_rollout_sets_secret_and_opens_prs_with_the_admins_gh(tmp_path, monkeypatch, capsys):
+    """Fake `gh`: records calls; acme/shop has no workflow yet, acme/api already has one."""
+    import stat
+    from t7 import cli
+    log = tmp_path / 'gh.log'
+    fake = tmp_path / 'gh'
+    fake.write_text(f"""#!/bin/sh
+echo "$*" >> {log}
+case "$*" in
+  "auth status") exit 0 ;;
+  "secret set"*) cat > /dev/null; exit 0 ;;
+  "repo list"*) echo '[{{"name":"shop","defaultBranchRef":{{"name":"main"}},"isFork":false,"isEmpty":false}},{{"name":"api","defaultBranchRef":{{"name":"develop"}},"isFork":false,"isEmpty":false}},{{"name":"fork","isFork":true}}]' ;;
+  *"repos/acme/api/contents/"*) exit 0 ;;
+  *"repos/acme/shop/contents/.github/workflows/triple-seven.yml") [ "$1" = "api" ] && [ "$2" != "-X" ] && exit 1 ;;
+  *"git/ref/heads/main"*) echo '{{"object":{{"sha":"abc"}}}}' ;;
+  "pr create"*) echo "https://github.com/acme/shop/pull/7" ;;
+esac
+exit 0
+""")
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv('PATH', f'{tmp_path}:/usr/bin:/bin')
+    import io, sys as _sys
+    monkeypatch.setattr(_sys, 'stdin', io.StringIO('t7_orgtoken\n'))
+    rc = None
+    try:
+        cli.main(['rollout', 'acme', '--all'])
+    except SystemExit as e:
+        rc = e.code
+    out = capsys.readouterr().out
+    calls = log.read_text()
+    assert rc == 0, out
+    assert 'secret set T7_TOKEN --org acme --visibility all' in calls
+    assert 'pr create -R acme/shop' in calls and 'pr create -R acme/api' not in calls
+    assert 'repos/acme/fork' not in calls                       # forks skipped
+    assert '1 pull request(s) opened, 1 already set up' in out
+    from t7.rollout import workflow
+    assert 'secrets.T7_TOKEN' in workflow('develop') and 'branches: [develop]' in workflow('develop')
