@@ -11,6 +11,9 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
+ON_STEP = None   # optional callback(node) for finished steps (MCP progress)
+
+
 class Tracer:
     ICON = {'running': '…', 'done': '✓', 'skipped': '·', 'failed': '✗'}
 
@@ -92,6 +95,11 @@ class Tracer:
             node['duration_ms'] = int((time.time() - t0) * 1000)
             self._print(node)
             self._emit(node, force=node['parent_seq'] is None)
+            if ON_STEP:
+                try:
+                    ON_STEP(node)
+                except Exception:  # noqa: BLE001 — progress must never break a run
+                    pass
 
     def skip(self, agent, title, reason):
         node = {'seq': self._next(), 'parent_seq': self._parent, 'agent': agent, 'title': title,

@@ -76,6 +76,12 @@ class LLM:
             r = self.api.llm(purpose, system, prompt, json_mode, max_tokens, temperature)
             self.model = r.get('model') or self.model
             return r.get('text', '')
+        if p == 'client':
+            from .mcp import sample
+            text, model = sample(system, prompt, max_tokens, temperature)
+            if model:
+                self.model = f'client:{model}'
+            return text
         if p == 'ollama':
             return self._ollama(system, prompt, json_mode, max_tokens, temperature)
         if p in ('openai', 'azure'):

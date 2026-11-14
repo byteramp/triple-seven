@@ -3,7 +3,8 @@
 Env:
   T7_TOKEN          repository token from the Triple Seven portal (t7_…)
   T7_API_URL        default https://t7.byteramp.se/api
-  T7_LLM            byteramp | openai | azure | anthropic | ollama   (default byteramp)
+  T7_LLM            byteramp | openai | azure | anthropic | ollama | client   (default byteramp;
+                    under `t7 mcp` the editor's own model via MCP sampling when supported)
   T7_LLM_MODEL      model / deployment name for BYO and local providers
   T7_LLM_BASE_URL   base URL for openai-compatible / azure / ollama
   T7_LLM_API_KEY    key for the customer's own provider (never sent to Byteramp)
@@ -47,7 +48,7 @@ class Config:
         env = os.environ
         c.token = env.get('T7_TOKEN', c.token)
         c.api_url = env.get('T7_API_URL', c.api_url).rstrip('/')
-        c.llm = env.get('T7_LLM', c.llm)
+        c.llm = env.get('T7_LLM') or env.get('T7_LLM_DEFAULT') or c.llm
         c.llm_model = env.get('T7_LLM_MODEL', c.llm_model)
         c.llm_base_url = env.get('T7_LLM_BASE_URL', c.llm_base_url)
         c.llm_api_key = env.get('T7_LLM_API_KEY', c.llm_api_key)
@@ -55,6 +56,8 @@ class Config:
         c.parallel = int(env.get('T7_PARALLEL', c.parallel))
         c.step_timeout = int(env.get('T7_STEP_TIMEOUT', c.step_timeout))
         c.offline = not c.token
+        if c.llm == 'client':
+            c.parallel = 1     # one sampling request at a time over the editor's channel
         return c
 
     @property

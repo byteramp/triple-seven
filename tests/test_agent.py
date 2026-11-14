@@ -12,6 +12,8 @@ import pytest
 
 from t7 import llm as llm_mod
 
+_ORIG_DISPATCH = llm_mod.LLM._dispatch
+
 VULN = """    rows = c.execute(f"select id, name from users where name = '{name}'").fetchall()"""
 FIXED = """    rows = c.execute("select id, name from users where name = ?", (name,)).fetchall()"""
 TEST = '''from app.users import find_user
@@ -290,3 +292,51 @@ def test_critic_needs_verbatim_control_quote():
     # the vulnerable line itself is never the control (seen with small models)
     assert not critic_refutes({'verdict': 'blocked', 'control': 'validation',
                                'quote': 'c.execute(f"... ORDER BY {sort}")'}, code, [2])
+
+
+def test_mcp_scan_uses_editor_model_via_sampling(repo, monkeypatch):
+    """The editor (e.g. VS Code Copilot) runs every model call via MCP sampling."""
+    import os as _os
+    import threading
+    from t7 import mcp
+    monkeypatch.delenv('T7_LLM', raising=False)
+    monkeypatch.delenv('T7_LLM_DEFAULT', raising=False)
+    monkeypatch.setattr(llm_mod.LLM, '_dispatch', _ORIG_DISPATCH)   # real path → MCP sampling
+    roles = [('PLANNER', 'plan'), ('ARCHITECTURE MAPPER', 'map'), ('SPECIALIST', 'analyze'),
+             ('INDEPENDENT VERIFIER', 'critic'), ('INDEPENDENT CRITIC', 'critic'), ('VERIFIER', 'triage'),
+             ('FIXER', 'fix'), ('PROVER', 'prove')]
+    c2s_r, c2s_w = _os.pipe()
+    s2c_r, s2c_w = _os.pipe()
+    srv_in, srv_out = _os.fdopen(c2s_r, 'r'), _os.fdopen(s2c_w, 'w')
+    cli_out, cli_in = _os.fdopen(c2s_w, 'w'), _os.fdopen(s2c_r, 'r')
+    server = threading.Thread(target=mcp.serve, args=(srv_in, srv_out), daemon=True)
+    server.start()
+
+    def send(obj):
+        cli_out.write(json.dumps(obj) + '\n')
+        cli_out.flush()
+    send({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize',
+          'params': {'protocolVersion': '2025-06-18', 'capabilities': {'sampling': {}},
+                     'clientInfo': {'name': 'Visual Studio Code', 'version': '1.106'}}})
+    send({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call',
+          'params': {'name': 't7_scan', 'arguments': {'base': 'HEAD~1'}, '_meta': {'progressToken': 'p1'}}})
+    samples, progress, result = 0, 0, None
+    while result is None:
+        msg = json.loads(cli_in.readline())
+        if msg.get('method') == 'sampling/createMessage':
+            samples += 1
+            p = msg['params']
+            purpose = next((r for k, r in roles if k in p['systemPrompt']), 'plan')
+            text = fake_dispatch(None, purpose, p['systemPrompt'], p['messages'][0]['content']['text'],
+                                 True, p['maxTokens'], 0)
+            send({'jsonrpc': '2.0', 'id': msg['id'], 'result': {
+                'role': 'assistant', 'model': 'gpt-4.1', 'content': {'type': 'text', 'text': text}}})
+        elif msg.get('method') == 'notifications/progress':
+            progress += 1
+        elif msg.get('id') == 2:
+            result = msg['result']
+    cli_out.close()
+    text = result['content'][0]['text']
+    assert samples >= 5 and progress >= 5
+    assert 'SQL injection in find_user' in text and 'fix verified' in text
+    _os.environ.pop('T7_LLM_DEFAULT', None)
