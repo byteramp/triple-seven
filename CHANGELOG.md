@@ -2,6 +2,16 @@
 
 Update with `t7 update`. t7 reminds you (at most once a day) when a new version is out.
 
+## 0.5.0
+- **Use the AI you are already signed in to — no API key.** t7 can run your signed-in
+  Claude Code, Codex, Gemini CLI or GitHub Copilot CLI for its analysis (in an empty
+  folder, tools off / read-only), under your own subscription. Your organisation's
+  policy "Developer's own AI assistant" uses the editor's model when you review from
+  the editor, otherwise the signed-in CLI. `T7_LLM=claude-cli` (or codex-cli, …) when no
+  policy is set. `t7 doctor` lists the assistants it found.
+- More editors and assistants registered by `t7 setup` / `t7 editors`: Claude Desktop,
+  Gemini CLI, Antigravity, Kiro, Zed, Cline. Perplexity (Mac): see `t7 editors --show`.
+
 ## 0.4.0
 - **Model policy from your organisation.** Your administrator decides which model analyses
   code (Byteramp EU models, your organisation's own model, a local model, or the editor's

@@ -82,7 +82,8 @@ passes `repo_path`).
 (portal → Repositories): Byteramp EU models, your organisation's own model (endpoint in
 the policy, API key in your environment as `T7_LLM_API_KEY`), a local Ollama model, or
 the editor's own model via MCP sampling (e.g. VS Code + Copilot — only if the policy
-allows it). t7 applies the policy before any model call; it overrides `T7_LLM` and
+allows it) — or the developer's own signed-in AI CLI (Claude Code, Codex, Gemini CLI,
+Copilot CLI) under their subscription, **no API key**. t7 applies the policy before any model call; it overrides `T7_LLM` and
 never falls back to another model. Every result states what analysed it. Without a
 policy, t7 uses Byteramp models (after opt-in) or what you set with `T7_LLM`.
 

@@ -5,6 +5,8 @@
   azure      Azure OpenAI (T7_LLM_BASE_URL = https://<res>.openai.azure.com, model = deployment)
   anthropic  Anthropic Messages API (customer's own key)
   ollama     local Ollama next to the agent
+  assistant  the developer's logged-in AI CLI (Claude Code, Codex, Gemini, Copilot) — no key
+  client     the editor's model via MCP sampling
 """
 import json
 import re
@@ -81,6 +83,17 @@ class LLM:
             text, model = sample(system, prompt, max_tokens, temperature)
             if model:
                 self.model = f'client:{model}'
+            return text
+        if p == 'assistant':
+            from . import assistants
+            key = self.cfg.assistant or assistants.pick()
+            if not key:
+                raise LLMError('No logged-in AI assistant CLI found (claude, codex, gemini or copilot).')
+            try:
+                text, model = assistants.complete(key, system, prompt, timeout=self.cfg.step_timeout)
+            except assistants.AssistantError as e:
+                raise LLMError(str(e)) from None
+            self.model = f'{key}:{model}'
             return text
         if p == 'ollama':
             return self._ollama(system, prompt, json_mode, max_tokens, temperature)

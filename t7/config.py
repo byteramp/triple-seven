@@ -3,8 +3,10 @@
 Env:
   T7_TOKEN          repository token from the Triple Seven portal (t7_…)
   T7_API_URL        default https://t7.byteramp.se/api
-  T7_LLM            byteramp | openai | azure | anthropic | ollama | client   (default byteramp;
-                    under `t7 mcp` the editor's own model via MCP sampling when supported)
+  T7_LLM            byteramp | openai | azure | anthropic | ollama | client | assistant |
+                    claude-cli | codex-cli | gemini-cli | copilot-cli   (default byteramp; an
+                    organisation model policy overrides it)
+  T7_ASSISTANT      claude | codex | gemini | copilot — which logged-in CLI to use
   T7_LLM_MODEL      model / deployment name for BYO and local providers
   T7_LLM_BASE_URL   base URL for openai-compatible / azure / ollama
   T7_LLM_API_KEY    key for the customer's own provider (never sent to Byteramp)
@@ -38,6 +40,7 @@ class Config:
                                                         '.github/ISSUE_TEMPLATE/'])
     offline: bool = False
     policy_label: str = ''        # set when an organisation model policy applies
+    assistant: str = ''           # claude | codex | gemini | copilot when llm == 'assistant'
     token_source: str = ''       # env | setup | ''
     token_key: str = None        # where a `t7 setup` token is stored (repo path, None = default)
     token_expires_at: str = ''
@@ -78,8 +81,12 @@ class Config:
         if root:
             c.remote, c.repo_name = _remote(root), Path(root).name
         c.offline = not c.token
+        if c.llm.endswith('-cli'):              # T7_LLM=claude-cli → assistant 'claude'
+            c.assistant, c.llm = c.llm[:-4], 'assistant'
         if c.llm == 'client':
             c.parallel = 1     # one sampling request at a time over the editor's channel
+        if c.llm == 'assistant':
+            c.parallel = min(c.parallel, 2)     # each step is a CLI process with its own login
         return c
 
     @property
@@ -89,7 +96,7 @@ class Config:
             return 'byteramp'
         if self.llm == 'ollama':
             return 'local'
-        if self.llm == 'client':
+        if self.llm in ('client', 'assistant'):
             return 'editor'
         return 'byo'
 

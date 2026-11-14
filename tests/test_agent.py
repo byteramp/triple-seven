@@ -496,8 +496,17 @@ def test_editor_registration_merges_and_is_idempotent(tmp_path, monkeypatch):
     (tmp_path / 'Code' / 'User' / 'mcp.json').write_text(json.dumps({'servers': {'other': {'command': 'x'}}}))
     (tmp_path / '.cursor').mkdir()
     (tmp_path / '.codex').mkdir()
+    (tmp_path / '.kiro').mkdir()
+    (tmp_path / '.gemini' / 'config').mkdir(parents=True)
+    (tmp_path / '.gemini' / 'settings.json').write_text(json.dumps({'theme': 'dark'}))
+    monkeypatch.setattr(editors, '_claude_desktop_dir', lambda: tmp_path / 'no-claude-desktop')
     first = {label: state for label, state, _ in editors.register()}
-    assert first == {'VS Code': 'added', 'Cursor': 'added', 'Codex': 'added'}
+    assert first == {'VS Code': 'added', 'Cursor': 'added', 'Codex': 'added', 'Kiro': 'added',
+                     'Gemini CLI': 'added', 'Antigravity': 'added'}
+    gem = json.loads((tmp_path / '.gemini' / 'settings.json').read_text())
+    assert gem['theme'] == 'dark' and gem['mcpServers']['triple-seven']['args'] == ['mcp']
+    assert json.loads((tmp_path / '.gemini' / 'config' / 'mcp_config.json').read_text())['mcpServers']['triple-seven']
+    assert json.loads((tmp_path / '.kiro' / 'settings' / 'mcp.json').read_text())['mcpServers']['triple-seven']
     vs = json.loads((tmp_path / 'Code' / 'User' / 'mcp.json').read_text())
     assert vs['servers']['other'] == {'command': 'x'}                       # kept
     assert vs['servers']['triple-seven'] == {'type': 'stdio', 'command': '/usr/local/bin/t7', 'args': ['mcp']}
@@ -595,7 +604,8 @@ def test_model_policy_overrides_local_choice_and_never_falls_back(monkeypatch):
     policy.apply(cfg, {'provider': 'byteramp', 'label': 'Byteramp EU models'})
     assert cfg.llm == 'byteramp' and cfg.policy_label == 'Byteramp EU models'
     # The editor's model only inside an editor that offers sampling.
-    with pytest.raises(AccessError, match='editor'):
+    monkeypatch.setattr('t7.assistants.installed', lambda: [])
+    with pytest.raises(AccessError, match='No signed-in AI assistant'):
         policy.apply(Config.load(None), {'provider': 'editor'}, can_sample=False)
     c = Config.load(None)
     policy.apply(c, {'provider': 'editor'}, can_sample=True)
@@ -623,3 +633,44 @@ def test_update_notice_once_a_day(tmp_path, monkeypatch):
     assert updates.notice(info) == ''                        # not again today
     assert updates.notice({'latest': __version__}) == ''      # up to date
     assert updates.parse('0.10.0') > updates.parse('0.9.9')
+
+
+
+def test_signed_in_assistant_cli_is_used_without_a_key(tmp_path, monkeypatch):
+    """No sampling (terminal / Claude Code): the logged-in CLI answers, in an empty dir, tools off."""
+    import json as _json
+    import stat
+    from t7 import assistants, policy
+    from t7.config import Config
+    from t7.llm import LLM
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    fake = bin_dir / 'claude'
+    log = tmp_path / 'calls.txt'
+    fake.write_text('#!/bin/sh\n'
+                    f'echo "$PWD|$*" >> {log}\n'
+                    'cat > /dev/null\n'
+                    'echo \'{"result": "{\\"ok\\": true}", "is_error": false, '
+                    '"modelUsage": {"claude-sonnet-4-5": {}}}\'\n')
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv('PATH', f'{bin_dir}:/usr/bin:/bin')
+    monkeypatch.delenv('T7_ASSISTANT', raising=False)
+    assert assistants.installed() == ['claude']
+    cfg = Config.load(None)
+    policy.apply(cfg, {'provider': 'editor', 'kind': ''}, can_sample=False)
+    assert (cfg.llm, cfg.assistant, cfg.llm_provider_kind) == ('assistant', 'claude', 'editor')
+    llm = LLM(cfg, None)
+    assert llm.json('plan', 'system', 'prompt') == {'ok': True}
+    assert llm.model == 'claude:claude-sonnet-4-5'
+    called = log.read_text()
+    assert '--tools' in called and 't7-assistant-' in called       # tools off, empty temp dir
+    # The admin can restrict which assistants are allowed.
+    monkeypatch.setattr('t7.assistants.installed', lambda: ['claude'])
+    import pytest
+    from t7.access import AccessError
+    with pytest.raises(AccessError, match='Codex'):
+        policy.apply(Config.load(None), {'provider': 'editor', 'kind': 'codex'}, can_sample=False)
+    # T7_LLM=claude-cli without a policy.
+    monkeypatch.setenv('T7_LLM', 'claude-cli')
+    c = Config.load(None)
+    assert (c.llm, c.assistant) == ('assistant', 'claude')

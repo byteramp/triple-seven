@@ -10,7 +10,7 @@ import urllib.request
 
 from .access import AccessError
 
-LABEL = {'byteramp': 'Byteramp EU models', 'editor': "the editor's own model",
+LABEL = {'byteramp': 'Byteramp EU models', 'editor': "the developer's own AI assistant",
          'local': 'a local model (Ollama)', 'byo': "your organisation's own model"}
 
 
@@ -27,11 +27,20 @@ def apply(cfg, req, can_sample=False):
     if p == 'byteramp':
         cfg.llm, cfg.llm_model = 'byteramp', ''
     elif p == 'editor':
-        if not can_sample:
-            raise AccessError(need + ' Run the review from your editor\'s AI assistant (for example '
-                              'VS Code + GitHub Copilot in Agent mode) — not from the terminal or CI.')
-        cfg.llm, cfg.llm_model = 'client', ''
-        cfg.parallel = 1
+        # The developer's own AI: the editor's model (MCP sampling) when the review runs in an
+        # editor that offers it, else a logged-in assistant CLI. `kind` may restrict which.
+        allowed = [x.strip() for x in (req.get('kind') or '').split(',') if x.strip()]
+        if can_sample and (not allowed or 'sampling' in allowed):
+            cfg.llm, cfg.llm_model, cfg.parallel = 'client', '', 1
+        else:
+            from . import assistants
+            key = assistants.pick([a for a in allowed if a != 'sampling'] or None)
+            if not key:
+                names = ', '.join(assistants.label(a) for a in (allowed or assistants.ASSISTANTS) if a != 'sampling')
+                raise AccessError(need + f' No signed-in AI assistant found on this machine. Install and sign in '
+                                  f'to one of: {names} — or start the review from your editor.')
+            cfg.llm, cfg.assistant, cfg.llm_model = 'assistant', key, ''
+            cfg.parallel = min(cfg.parallel, 2)
     elif p == 'local':
         cfg.llm = 'ollama'
         cfg.llm_model = req.get('model') or cfg.llm_model

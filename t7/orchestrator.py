@@ -63,6 +63,10 @@ def _committed_fixes(root):
 
 
 def analysed_with(cfg):
+    from .assistants import label as assistant_label
+    if cfg.llm == 'assistant':
+        return f"{assistant_label(cfg.assistant or '')} (your signed-in assistant)" + (
+            ' (organisation policy)' if cfg.policy_label else '')
     names = {'byteramp': 'Byteramp EU models', 'client': "the editor's own model", 'ollama': 'local Ollama',
              'azure': 'Azure OpenAI', 'openai': 'OpenAI-compatible', 'anthropic': 'Anthropic'}
     base = names.get(cfg.llm, cfg.llm)
@@ -223,7 +227,7 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
         if run_id:
             result = {**result, **api.finish(
                 run_id, resolved_fingerprints=result.get('resolved', []),
-                llm_model=(llm.model or '').replace('client:', ''),
+                llm_model=llm.model or '',
                 committed_patches=_committed_fixes(root),
                 rejected=memory['rejected'], reused_rejections=memory['reused'],
                 merges=merges(root, push_base) if push else [],

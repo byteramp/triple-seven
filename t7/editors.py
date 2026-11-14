@@ -6,7 +6,8 @@ uses the token `t7 setup` stored for that repository. No token is ever written
 into an editor config.
 
 Supported: VS Code (+ Insiders, GitHub Copilot agent mode), Cursor, Windsurf,
-Claude Code, Codex. Existing configs are merged, never overwritten; a config we
+Claude Code, Codex, Claude Desktop, Gemini CLI, Antigravity, Kiro, Zed, Cline.
+Perplexity (Mac) adds local MCP servers in its own UI — see `t7 editors --show`. Existing configs are merged, never overwritten; a config we
 cannot parse safely (e.g. JSON with comments) is left alone and the manual
 snippet is shown instead.
 """
@@ -106,9 +107,45 @@ def detect():
                                                               'mcpServers', e)))
     if shutil.which('claude'):
         found.append(('Claude Code', lambda: _claude_code(cmd)))
+    std = {'command': cmd, 'args': ['mcp']}
+    cd = _claude_desktop_dir()
+    if cd.exists():
+        found.append(('Claude Desktop', lambda: _json_target('Claude Desktop', cd / 'claude_desktop_config.json',
+                                                            'mcpServers', std)))
+    gem = _home() / '.gemini'
+    if (gem / 'settings.json').exists() or shutil.which('gemini'):
+        # Gemini CLI: long reviews → generous tool timeout (ms).
+        found.append(('Gemini CLI', lambda: _json_target('Gemini CLI', gem / 'settings.json', 'mcpServers',
+                                                        {**std, 'timeout': 900000})))
+    if (gem / 'config').exists() or (gem / 'antigravity').exists() or Path('/Applications/Antigravity.app').exists():
+        ag = gem / 'config' / 'mcp_config.json'
+        if not ag.exists() and (gem / 'antigravity' / 'mcp_config.json').exists():
+            ag = gem / 'antigravity' / 'mcp_config.json'          # older Antigravity versions
+        found.append(('Antigravity', lambda p=ag: _json_target('Antigravity', p, 'mcpServers', std)))
+    kiro = _home() / '.kiro'
+    if kiro.exists():
+        found.append(('Kiro', lambda: _json_target('Kiro', kiro / 'settings' / 'mcp.json', 'mcpServers', std)))
+    zed = _home() / '.config' / 'zed'
+    if zed.exists():
+        found.append(('Zed', lambda: _json_target('Zed', zed / 'settings.json', 'context_servers',
+                                                 {**std, 'env': {}})))
+    for label, user_dir in _vscode_user_dirs():
+        cline = user_dir / 'globalStorage' / 'saoudrizwan.claude-dev' / 'settings'
+        if cline.exists():
+            found.append((f'Cline ({label})', lambda p=cline / 'cline_mcp_settings.json', l=label:
+                          _json_target(f'Cline ({l})', p, 'mcpServers', std)))
     if (_home() / '.codex').exists() or shutil.which('codex'):
         found.append(('Codex', lambda: _codex(cmd)))
     return found
+
+
+def _claude_desktop_dir():
+    system = platform.system()
+    if system == 'Darwin':
+        return _home() / 'Library' / 'Application Support' / 'Claude'
+    if system == 'Windows':
+        return Path(os.environ.get('APPDATA') or _home() / 'AppData' / 'Roaming') / 'Claude'
+    return _home() / '.config' / 'Claude'
 
 
 def _claude_code(cmd):
@@ -162,6 +199,16 @@ def manual_snippets():
         ('Cursor — ~/.cursor/mcp.json', json.dumps({'mcpServers': {NAME: j}}, indent=2)),
         ('Windsurf — ~/.codeium/windsurf/mcp_config.json', json.dumps({'mcpServers': {NAME: j}}, indent=2)),
         ('Claude Code — terminal', f'claude mcp add --scope user {NAME} -- {cmd} mcp'),
+        ('Claude Desktop — Settings → Developer → Edit Config (claude_desktop_config.json)',
+         json.dumps({'mcpServers': {NAME: j}}, indent=2) + '\n# Desktop apps see no workspace: ask "review <absolute path> with Triple Seven".'),
+        ('Gemini CLI — ~/.gemini/settings.json', json.dumps({'mcpServers': {NAME: {**j, 'timeout': 900000}}}, indent=2)),
+        ('Antigravity — ~/.gemini/config/mcp_config.json (Agent panel → MCP Servers → View raw config)',
+         json.dumps({'mcpServers': {NAME: j}}, indent=2)),
+        ('Kiro — ~/.kiro/settings/mcp.json', json.dumps({'mcpServers': {NAME: j}}, indent=2)),
+        ('Zed — settings.json (Command Palette → "zed: open settings")',
+         json.dumps({'context_servers': {NAME: {**j, 'env': {}}}}, indent=2)),
+        ('Perplexity (Mac) — Settings → Connectors → install the helper → Add Connector → Advanced',
+         json.dumps({'mcpServers': {NAME: j}}, indent=2) + '\n# Ask: "review <absolute path to the repository> with Triple Seven".'),
         ('Codex — ~/.codex/config.toml',
          f'[mcp_servers.{NAME}]\ncommand = {json.dumps(cmd)}\nargs = ["mcp"]\ntool_timeout_sec = 900'),
     ]

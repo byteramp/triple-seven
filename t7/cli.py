@@ -150,7 +150,9 @@ def cmd_doctor(a):
         print(f"stack        {', '.join(prof.stack) or 'unknown'}")
         print(f"tests        {prof.test_cmd or '—'}  (L2 proofs {'on' if prof.can_prove else 'off'})")
         print(f"lint/types   {prof.lint_cmd or '—'} / {prof.type_cmd or '—'}")
-    from . import editors
+    from . import assistants, editors
+    signed = [assistants.label(k) for k in assistants.installed()]
+    print(f"assistants   {', '.join(signed) if signed else 'none found'}  (AI CLIs t7 can use without an API key)")
     eds = [label for label, _ in editors.detect()]
     print(f"editors      {', '.join(eds) if eds else 'none detected'}  (t7 editors to add Triple Seven)")
     if not cfg.token:
