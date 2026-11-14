@@ -24,6 +24,7 @@ import threading
 import traceback
 
 from . import __version__, gitops
+from .access import AccessError
 
 PROTOCOL_VERSION = '2025-06-18'
 SUPPORTED_VERSIONS = {'2024-11-05', '2025-03-26', '2025-06-18'}
@@ -235,6 +236,9 @@ def _fmt_findings(last):
     return '\n'.join(lines)
 
 
+LOCAL_ONLY = '\n\n⚠ Local-only run (T7_ALLOW_OFFLINE): not recorded in the Triple Seven portal.'
+
+
 def tool_scan(args):
     from . import trace
     from .orchestrator import scan_repo
@@ -249,10 +253,10 @@ def tool_scan(args):
                         fix=args.get('fix', True), quiet=True, client='mcp')
     if res.get('no_changes'):
         return _text('Nothing changed compared with the base branch. Call t7_scan with all=true to '
-                     'review the whole repository.' + ('' if res.get('run_id') else "\n\n⚠ NOT CONNECTED: T7_TOKEN is not set in the MCP server's environment, so this review ran locally only and was NOT recorded in the Triple Seven portal. Add T7_TOKEN (and T7_API_URL) to the server's \"env\" in mcp.json and restart the server."))
+                     'review the whole repository.' + ('' if res.get('run_id') else LOCAL_ONLY))
     root = _root()
     note = (f"\nPortal run: {res.get('run_id')}" if res.get('run_id') else
-            "\n\n⚠ NOT CONNECTED: T7_TOKEN is not set in the MCP server's environment, so this review ran locally only and was NOT recorded in the Triple Seven portal. Add T7_TOKEN (and T7_API_URL) to the server's \"env\" in mcp.json and restart the server.")
+            LOCAL_ONLY)
     return _text(_fmt_findings(_last(root)) + note)
 
 
@@ -311,6 +315,7 @@ def tool_apply_fix(args):
 
 def tool_doctor(args):
     from .cli import cmd_doctor
+    _ensure_repo_cwd()
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         try:
@@ -364,6 +369,11 @@ def handle(msg):
             out = fn(params.get('arguments') or {})
             result, is_error = (out if isinstance(out, tuple) else (out, False))
             return ok({**result, 'isError': bool(is_error)})
+        except AccessError as e:
+            return ok({**_text(f'Triple Seven is not connected for this repository.\n{e}\n\n'
+                               'Tell the developer to run `t7 setup` in a terminal inside the repository '
+                               '(the token is stored for that repository, so mcp.json needs no token), '
+                               'then retry. Do not attempt the review yourself.'), 'isError': True})
         except SystemExit as e:
             return ok({**_text(f't7 stopped: exit {e.code}. Run t7_doctor.'), 'isError': True})
         except Exception as e:  # noqa: BLE001 — tool errors are results, not protocol errors

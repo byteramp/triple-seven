@@ -9,11 +9,17 @@ finding metadata (title, file:line, fix/proof results as hashes and pass/fail).
 
 ```bash
 pipx install t7-agent                  # stdlib only, no third-party dependencies
-export T7_TOKEN=t7_...                 # from the portal: Triple Seven → Repositories
-t7 doctor
+cd your-repo
+t7 setup                               # paste your token (hidden); verified, then stored for this repo
 t7 scan                                # review your current branch + uncommitted work
 t7 fix SEC-REQ-SHOP-004                # apply a verified fix and its regression test
 ```
+
+An active Triple Seven subscription and a repository token (portal → Triple Seven →
+Repositories) are required for every review — in the terminal, in your IDE and in
+CI. `t7 setup` checks the token against Byteramp before saving it to
+`~/.config/t7/credentials.json` (mode 0600), keyed by the repository path. In CI,
+set `T7_TOKEN` instead; it always takes precedence. `t7 logout` removes a stored token.
 
 ## In your editor / AI assistant (MCP)
 
@@ -22,25 +28,26 @@ change you're working on, explain findings and apply verified fixes — before a
 pull request exists. Tools: `t7_scan`, `t7_findings`, `t7_explain`,
 `t7_show_fix`, `t7_apply_fix`, `t7_doctor`.
 
+Run `t7 setup` once in the repository and the MCP server uses that token — no
+token in any editor config. (Setting `T7_TOKEN` in the server's `env` still works
+and wins.)
+
 ```bash
-# Claude Code (local scope — token stays out of the repo)
-claude mcp add triple-seven -e T7_TOKEN=t7_... -e T7_API_URL=https://t7.byteramp.se/api -- t7 mcp
+# Claude Code
+claude mcp add triple-seven -- t7 mcp
 ```
 
 Cursor / Windsurf (`~/.cursor/mcp.json`, `~/.codeium/windsurf/mcp_config.json`):
 ```json
-{ "mcpServers": { "triple-seven": { "command": "t7", "args": ["mcp"],
-  "env": { "T7_TOKEN": "t7_...", "T7_API_URL": "https://t7.byteramp.se/api" } } } }
+{ "mcpServers": { "triple-seven": { "command": "t7", "args": ["mcp"] } } }
 ```
 
-VS Code (`.vscode/mcp.json`, safe to commit — each developer is prompted for their token).
+VS Code (`.vscode/mcp.json`, safe to commit — it holds no token).
 With GitHub Copilot in **Agent** mode the analysis runs on **your Copilot model** via MCP
 sampling (VS Code asks once to allow it) — no separate AI setup. Set `T7_LLM` to override:
 ```json
-{ "inputs": [{ "type": "promptString", "id": "t7-token", "description": "Triple Seven token", "password": true }],
-  "servers": { "triple-seven": { "type": "stdio", "command": "t7", "args": ["mcp"],
-    "env": { "T7_TOKEN": "${input:t7-token}", "T7_API_URL": "https://t7.byteramp.se/api",
-             "T7_REPO": "${workspaceFolder}" } } } }
+{ "servers": { "triple-seven": { "type": "stdio", "command": "t7", "args": ["mcp"],
+    "env": { "T7_REPO": "${workspaceFolder}" } } } }
 ```
 
 Codex (`~/.codex/config.toml`):
@@ -48,7 +55,6 @@ Codex (`~/.codex/config.toml`):
 [mcp_servers.triple-seven]
 command = "t7"
 args = ["mcp"]
-env = { T7_TOKEN = "t7_...", T7_API_URL = "https://t7.byteramp.se/api" }
 tool_timeout_sec = 900
 ```
 

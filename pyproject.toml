@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "t7-agent"
-version = "0.1.4"
+version = "0.1.5"
 description = "Triple Seven agent by Byteramp: threat modeling, verified fixes and proof for every pull request. Your code never leaves your environment."
 requires-python = ">=3.10"
 dependencies = []          # stdlib only: small supply-chain surface, easy to audit

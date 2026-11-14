@@ -371,3 +371,64 @@ def test_mcp_config_is_not_an_llm_tool_call():
     h.added_lines = [(1, 'resp = client.chat.completions.create(model=m, tools=[refund_tool])')]
     sigs, _ = scan([ChangedFile('app/agent.py', 'A', [h])])
     assert [s for s in sigs if s['kind'] == 'llm_tool_call']
+
+
+def test_scan_requires_access_without_dev_flag(repo, monkeypatch):
+    import pytest
+    from t7.access import AccessError
+    from t7.orchestrator import scan_repo
+    monkeypatch.delenv('T7_ALLOW_OFFLINE')
+    with pytest.raises(AccessError, match='t7 setup'):
+        scan_repo(fix=False, quiet=True)
+
+
+def test_mcp_scan_without_access_tells_user_to_setup(repo, monkeypatch):
+    from t7 import mcp
+    monkeypatch.delenv('T7_ALLOW_OFFLINE')
+    r = mcp.handle({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                    'params': {'name': 't7_scan', 'arguments': {}}})
+    assert r['result']['isError'] and 't7 setup' in r['result']['content'][0]['text']
+
+
+def test_setup_token_is_stored_per_repo_and_env_wins(repo, monkeypatch):
+    import os, stat
+    from t7 import credentials
+    from t7.config import Config
+    credentials.store('t7_stored', 'https://example.test/api', 'acme/app', repo)
+    assert stat.S_IMODE(os.stat(credentials.path()).st_mode) == 0o600
+    c = Config.load(repo)
+    assert (c.token, c.token_source, c.api_url) == ('t7_stored', 'setup', 'https://example.test/api')
+    assert not c.offline
+    monkeypatch.setenv('T7_TOKEN', 't7_env')
+    assert Config.load(repo).token == 't7_env'
+    monkeypatch.delenv('T7_TOKEN')
+    credentials.remove(repo)
+    assert Config.load(repo).offline
+
+
+def test_setup_verifies_before_storing(repo, monkeypatch, capsys):
+    from t7 import cli, credentials
+    from t7.api import APIError, Byteramp
+    monkeypatch.setattr(cli, '_read_token', lambda: 't7_bad')
+    def deny(self):
+        raise APIError(401, 'Invalid token')
+    monkeypatch.setattr(Byteramp, 'config', deny)
+    assert cli.cmd_setup(type('A', (), {'default': False, 'api_url': None})()) == 1
+    assert credentials.lookup(repo) is None
+    monkeypatch.setattr(cli, '_read_token', lambda: 't7_good')
+    monkeypatch.setattr(Byteramp, 'config', lambda self: {'repository': {'full_name': 'acme/app'},
+                                                          'llm': {'byteramp_allowed': True}})
+    assert cli.cmd_setup(type('A', (), {'default': False, 'api_url': None})()) == 0
+    assert credentials.lookup(repo)['token'] == 't7_good'
+    assert 'acme/app' in capsys.readouterr().out
+
+
+def test_doctor_and_welcome_outside_git(tmp_path, monkeypatch, capsys):
+    import pytest
+    from t7 import cli
+    monkeypatch.chdir(tmp_path)
+    assert cli.cmd_doctor(None) == 1
+    assert 'not inside a git repository' in capsys.readouterr().out
+    with pytest.raises(SystemExit) as e:
+        cli.main([])
+    assert e.value.code == 0 and 't7 setup' in capsys.readouterr().out

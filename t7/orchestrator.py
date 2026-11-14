@@ -24,6 +24,7 @@ from .agents.triage import TRIAGE_SYSTEM, _context, triage_all
 from .ci import ZERO, merges, push_context, set_github_status
 from .codeowners import CodeOwners
 from .api import APIError, Byteramp
+from .access import AccessError, NOT_CONNECTED, REJECTED, UNREACHABLE, offline_allowed
 from .config import Config
 from .context import detect
 from .llm import LLM
@@ -78,6 +79,8 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
     profile = detect(root, cfg)
 
     policy, run_id = {}, None
+    if cfg.offline and not offline_allowed():
+        raise AccessError(NOT_CONNECTED)
     if not cfg.offline:
         try:
             r = api.start_run(trigger='pull_request' if gh else ('push' if push or ci else 'local'),
@@ -90,14 +93,12 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                               client=client or ('action' if ci else 'cli'))
             run_id, policy = r['run_id'], r
         except APIError as e:
-            print(f't7: cannot reach Byteramp ({e}).', file=sys.stderr)
-            if e.status in (401, 403):
-                sys.exit(2)
-            cfg.offline = True
+            if e.status in (401, 402, 403):
+                raise AccessError(REJECTED.format(detail=e.detail or e.status)) from None
+            raise AccessError(UNREACHABLE.format(url=cfg.api_url, detail=e.detail or e.status)) from None
     if cfg.llm == 'byteramp' and cfg.offline:
-        print('t7: Byteramp models need a token. Set T7_TOKEN or use T7_LLM=ollama|openai|azure|anthropic.',
-              file=sys.stderr)
-        sys.exit(2)
+        raise AccessError('Byteramp models need a connected repository. Run `t7 setup`, or for '
+                          'local development set T7_LLM=ollama|openai|azure|anthropic.')
 
     if cfg.llm == 'byteramp':
         cfg.parallel = max(1, min(cfg.parallel, int((policy.get('llm') or {}).get('max_parallel') or 1)))

@@ -1,17 +1,22 @@
 """t7 — Triple Seven command line.
 
+  t7 setup                      connect this repository (token, verified against Byteramp)
   t7 scan [--base REF] [--no-fix] [--ci] [--json] [--quiet]
   t7 fix  <SEC-REQ-ID>          apply a verified fix (and its regression test) locally
   t7 list                       fixes available from the last local scan
-  t7 doctor                     check token, model provider and test tooling
+  t7 doctor                     check access, model provider and test tooling
+  t7 logout                     remove the token stored by `t7 setup` for this repository
   t7 command                    apply /t7 decisions typed in a PR comment (CI)
   t7 mcp                        MCP server for Claude Code, Cursor, VS Code, Codex …
 """
 import argparse
+import getpass
 import json
+import os
 import sys
 
-from . import __version__, gitops
+from . import __version__, credentials, gitops
+from .access import WELCOME, AccessError
 from .config import Config
 from .context import detect
 
@@ -35,7 +40,7 @@ def _print_human(res):
     if res.get('run_id'):
         print(f"\nDetails: portal → Triple Seven → Runs ({res['run_id']})")
     else:
-        print('\n⚠ Not connected (no T7_TOKEN): this review ran locally only and is not in the portal.')
+        print('\n⚠ Local-only run (T7_ALLOW_OFFLINE): not recorded in the portal.')
 
 
 def cmd_scan(a):
@@ -95,18 +100,32 @@ def cmd_fix(a):
     return 0
 
 
+def _root_or_none():
+    try:
+        return gitops.repo_root()
+    except (RuntimeError, OSError):
+        return None
+
+
 def cmd_doctor(a):
-    root = gitops.repo_root()
+    root = _root_or_none()
     cfg = Config.load(root)
-    prof = detect(root, cfg)
     print(f't7 {__version__}')
-    print(f"token        {'set' if cfg.token else 'MISSING (T7_TOKEN) — offline mode'}")
+    src = {'env': 'T7_TOKEN', 'setup': 't7 setup'}.get(cfg.token_source, '')
+    print(f"token        {'set (' + src + ')' if cfg.token else 'not connected — run `t7 setup`'}")
     print(f'api          {cfg.api_url}')
     print(f"model        {cfg.llm}{' / ' + cfg.llm_model if cfg.llm_model else ''}")
-    print(f"git          {'ok' if gitops.has_commits(root) else 'no commits yet — fixes need a first commit'}")
-    print(f"stack        {', '.join(prof.stack) or 'unknown'}")
-    print(f"tests        {prof.test_cmd or '—'}  (L2 proofs {'on' if prof.can_prove else 'off'})")
-    print(f"lint/types   {prof.lint_cmd or '—'} / {prof.type_cmd or '—'}")
+    if root is None:
+        print('git          not inside a git repository — cd into the repository you want to review')
+    else:
+        prof = detect(root, cfg)
+        print(f"git          {'ok' if gitops.has_commits(root) else 'no commits yet — fixes need a first commit'}")
+        print(f"stack        {', '.join(prof.stack) or 'unknown'}")
+        print(f"tests        {prof.test_cmd or '—'}  (L2 proofs {'on' if prof.can_prove else 'off'})")
+        print(f"lint/types   {prof.lint_cmd or '—'} / {prof.type_cmd or '—'}")
+    if not cfg.token:
+        print('\nRun `t7 setup` to connect. An active Triple Seven subscription and repository token are required.')
+        return 1
     if cfg.token:
         from .api import APIError, Byteramp
         try:
@@ -122,10 +141,74 @@ def cmd_doctor(a):
     return 0
 
 
+def _read_token():
+    if not sys.stdin.isatty():                       # piped: printf %s "$TOKEN" | t7 setup
+        return sys.stdin.readline().strip()
+    return getpass.getpass('Repository token (input hidden): ').strip()
+
+
+def cmd_setup(a):
+    from .api import APIError, Byteramp
+    root = None if a.default else _root_or_none()
+    print('Triple Seven · Byteramp — connect\n')
+    print('Get your token: Portal → Triple Seven → Repositories → your repository.')
+    if root:
+        print(f'Repository on this machine: {root}')
+    else:
+        print('Not inside a git repository: the token is stored as your default.')
+    token = _read_token()
+    if not token.startswith('t7_'):
+        print('That does not look like a Triple Seven token (it starts with t7_).', file=sys.stderr)
+        return 1
+    cfg = Config.load(root)
+    cfg.token, cfg.offline = token, False
+    if a.api_url:
+        cfg.api_url = a.api_url.rstrip('/')
+    print('Checking access …')
+    try:
+        pol = Byteramp(cfg).config()
+    except APIError as e:
+        if e.status in (401, 402, 403):
+            print(f'Token not accepted ({e.detail or e.status}). It may be revoked or expired, or the '
+                  'subscription inactive. Create a new one in the portal.', file=sys.stderr)
+        else:
+            print(f'Cannot reach {cfg.api_url} ({e.detail or e.status}). Nothing was saved.', file=sys.stderr)
+        return 1
+    repo = (pol.get('repository') or {}).get('full_name', '')
+    credentials.store(token, cfg.api_url, repo, root)
+    llm = pol.get('llm') or {}
+    print(f'\n✓ Connected to {repo}')
+    print(f'  Token stored in {credentials.path()} (only readable by you).')
+    if os.environ.get('T7_TOKEN'):
+        print('  Note: T7_TOKEN is set in this shell and takes precedence over the stored token.')
+    print(f"  Byteramp models: {'enabled' if llm.get('byteramp_allowed') else 'not enabled for this repository'}")
+    if not llm.get('byteramp_allowed'):
+        print('  → enable them under Triple Seven → Repositories, or set T7_LLM to your own provider.')
+    print('\nNext:')
+    print('  t7 scan          review your current change')
+    print('  t7 scan --all    review the whole repository')
+    print('  t7 mcp           use it from your IDE assistant (no token needed in mcp.json now)')
+    return 0
+
+
+def cmd_logout(a):
+    root = None if a.default else _root_or_none()
+    credentials.remove(root)
+    print('Stored token removed' + (f' for {root}.' if root else ' (default).'))
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog='t7', description='Triple Seven by Byteramp')
     p.add_argument('--version', action='version', version=f't7 {__version__}')
-    sub = p.add_subparsers(dest='cmd', required=True)
+    sub = p.add_subparsers(dest='cmd')
+    su = sub.add_parser('setup', help='connect this repository with your token')
+    su.add_argument('--default', action='store_true', help='store as default for all repositories')
+    su.add_argument('--api-url', help='API base URL (default https://t7.byteramp.se/api)')
+    su.set_defaults(fn=cmd_setup)
+    lo = sub.add_parser('logout', help='remove the stored token for this repository')
+    lo.add_argument('--default', action='store_true')
+    lo.set_defaults(fn=cmd_logout)
     s = sub.add_parser('scan', help='review the current change')
     s.add_argument('--base', help='base ref (default: merge-base with origin/main)')
     s.add_argument('--all', action='store_true', help='review the whole repository, not just the change')
@@ -144,7 +227,14 @@ def main(argv=None):
     sub.add_parser('mcp', help='run as an MCP server (stdio) for IDE assistants').set_defaults(
         fn=lambda a: __import__('t7.mcp', fromlist=['serve']).serve() or 0)
     a = p.parse_args(argv)
-    sys.exit(a.fn(a))
+    if not getattr(a, 'fn', None):
+        print(WELCOME)
+        sys.exit(0)
+    try:
+        sys.exit(a.fn(a))
+    except AccessError as e:
+        print(f't7: {e}', file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == '__main__':

@@ -9,6 +9,8 @@ Env:
   T7_LLM_BASE_URL   base URL for openai-compatible / azure / ollama
   T7_LLM_API_KEY    key for the customer's own provider (never sent to Byteramp)
   T7_MAX_FIX_ATTEMPTS, T7_PARALLEL, T7_STEP_TIMEOUT
+
+Token precedence: T7_TOKEN  >  token stored by `t7 setup` for this repository  >  stored default.
 """
 import json
 import os
@@ -35,12 +37,13 @@ class Config:
                                                         '.vscode/', '.cursor/', '.idea/', '.t7/',
                                                         '.github/ISSUE_TEMPLATE/'])
     offline: bool = False
+    token_source: str = ''       # env | setup | ''
 
     @classmethod
-    def load(cls, root: Path):
+    def load(cls, root):
         c = cls()
-        f = root / '.t7.json'
-        if f.exists():
+        f = Path(root) / '.t7.json' if root else None
+        if f and f.exists():
             try:
                 for k, v in json.loads(f.read_text()).items():
                     if hasattr(c, k) and k not in ('token', 'llm_api_key'):  # secrets: env only
@@ -48,8 +51,15 @@ class Config:
             except (ValueError, OSError):
                 pass
         env = os.environ
-        c.token = env.get('T7_TOKEN', c.token)
-        c.api_url = env.get('T7_API_URL', c.api_url).rstrip('/')
+        stored = None
+        if env.get('T7_TOKEN'):
+            c.token, c.token_source = env['T7_TOKEN'], 'env'
+        else:
+            from . import credentials
+            stored = credentials.lookup(root)
+            if stored and stored.get('token'):
+                c.token, c.token_source = stored['token'], 'setup'
+        c.api_url = (env.get('T7_API_URL') or (stored or {}).get('api_url') or c.api_url).rstrip('/')
         c.llm = env.get('T7_LLM') or env.get('T7_LLM_DEFAULT') or c.llm
         c.llm_model = env.get('T7_LLM_MODEL', c.llm_model)
         c.llm_base_url = env.get('T7_LLM_BASE_URL', c.llm_base_url)
