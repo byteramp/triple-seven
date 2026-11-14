@@ -81,8 +81,7 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
     if not cfg.offline:
         try:
             r = api.start_run(trigger='pull_request' if gh else ('push' if push or ci else 'local'),
-                              ref=os.environ.get('GITHUB_HEAD_REF') or gitops.git(
-                                  root, 'rev-parse', '--abbrev-ref', 'HEAD').strip(),
+                              ref=os.environ.get('GITHUB_HEAD_REF') or gitops.current_branch(root),
                               base_sha=base_sha, head_sha=head,
                               pr_number=gh and gh['number'], pr_title=gh and gh['title'],
                               pr_url=gh and gh['url'], author=gh and gh['author'],
@@ -113,6 +112,7 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                          base=base_sha[:12], head=head[:12]) as root_step:
             if not changed:
                 root_step.skip('no changes against the base')
+                result['no_changes'] = True
             else:
                 signals, areas = scan(changed)
                 chain = plan(changed, areas, signals, profile, llm, tracer)
@@ -144,7 +144,10 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                 resolved = _recheck_open(policy.get('open_findings', []), confirmed, root, changed,
                                          llm, tracer)
 
-                if fix and confirmed:
+                if fix and confirmed and not gitops.has_commits(root):
+                    tracer.skip('fixer', 'Fix + verify',
+                                'make a first commit so fixes can be verified in an isolated worktree')
+                elif fix and confirmed:
                     verifier = Verifier(root, profile, cfg, llm, tracer)
                     fixable = [h for h in confirmed if h.file_path and h.rank >= SEV_RANK['low']]
                     with tracer.step('orchestrator', f'Fix + verify {len(fixable)} finding(s)'):

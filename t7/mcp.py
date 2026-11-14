@@ -41,6 +41,7 @@ TOOLS = [
             'type': 'object',
             'properties': {
                 'base': {'type': 'string', 'description': 'Base ref (default: merge-base with origin/main)'},
+                'all': {'type': 'boolean', 'description': 'Review the whole repository instead of the change'},
                 'fix': {'type': 'boolean', 'description': 'Generate and verify fixes (default true)'},
             },
         },
@@ -241,7 +242,11 @@ def tool_scan(args):
     buf = io.StringIO()
     # Never let anything reach stdout (it is the protocol channel).
     with contextlib.redirect_stdout(buf):
-        res = scan_repo(base=args.get('base'), fix=args.get('fix', True), quiet=True, client='mcp')
+        res = scan_repo(base=gitops.EMPTY_TREE if args.get('all') else args.get('base'),
+                        fix=args.get('fix', True), quiet=True, client='mcp')
+    if res.get('no_changes'):
+        return _text('Nothing changed compared with the base branch. Call t7_scan with all=true to '
+                     'review the whole repository.')
     root = _root()
     return _text(_fmt_findings(_last(root)) + (
         f"\nPortal run: {res.get('run_id')}" if res.get('run_id') else ''))

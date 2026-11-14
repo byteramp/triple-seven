@@ -340,3 +340,22 @@ def test_mcp_scan_uses_editor_model_via_sampling(repo, monkeypatch):
     assert samples >= 5 and progress >= 5
     assert 'SQL injection in find_user' in text and 'fix verified' in text
     _os.environ.pop('T7_LLM_DEFAULT', None)
+
+
+def test_single_commit_and_untracked_files(tmp_path, monkeypatch):
+    import subprocess as sp
+    from t7 import gitops
+    r = tmp_path / 'r'
+    r.mkdir()
+    def g(*a): sp.run(['git', '-c', 'user.email=t@t', '-c', 'user.name=t', *a], cwd=r, check=True, capture_output=True)
+    g('init', '-q', '-b', 'main')
+    (r / 'new.py').write_text('import os\nos.system("rm " + input())\n')   # untracked, no commits
+    assert gitops.resolve_base(r) == gitops.EMPTY_TREE and gitops.head_sha(r) == ''
+    files = gitops.changed_files(r, gitops.resolve_base(r))
+    assert [f.path for f in files] == ['new.py'] and len(files[0].added) == 2
+    g('add', '-A'); g('commit', '-qm', 'one')                              # exactly one commit
+    (r / 'other.py').write_text('x = 1\n')
+    files = gitops.changed_files(r, gitops.resolve_base(r))      # on main: only uncommitted work
+    assert [f.path for f in files] == ['other.py']
+    files = gitops.changed_files(r, gitops.EMPTY_TREE)           # t7 scan --all
+    assert sorted(f.path for f in files) == ['new.py', 'other.py']

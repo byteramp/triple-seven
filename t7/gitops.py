@@ -58,17 +58,32 @@ def resolve_base(root, base=None):
             mb = run(['git', 'merge-base', c, 'HEAD'], root)
             if mb.returncode == 0:
                 return mb.stdout.strip()
-    return git(root, 'rev-parse', 'HEAD~1').strip()
+    if run(['git', 'rev-parse', '--verify', '--quiet', 'HEAD~1'], root).returncode == 0:
+        return git(root, 'rev-parse', 'HEAD~1').strip()
+    # First commit, or no commits yet: review everything against the empty tree.
+    return EMPTY_TREE
+
+
+EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'   # git's well-known empty tree
+
+
+def has_commits(root):
+    return run(['git', 'rev-parse', '--verify', '--quiet', 'HEAD'], root).returncode == 0
 
 
 def head_sha(root):
-    return git(root, 'rev-parse', 'HEAD').strip()
+    return git(root, 'rev-parse', 'HEAD').strip() if has_commits(root) else ''
+
+
+def current_branch(root):
+    p = run(['git', 'symbolic-ref', '--quiet', '--short', 'HEAD'], root)
+    return p.stdout.strip() if p.returncode == 0 else 'HEAD'
 
 
 def changed_files(root, base, include_worktree=True, ignore=()):
     """Parse a unified diff (base..HEAD, plus uncommitted work for local runs)."""
     args = ['diff', '--unified=0', '--no-color', '--find-renames', base]
-    if not include_worktree:
+    if not include_worktree and has_commits(root):
         args.append('HEAD')
     out = git(root, *args)
     files, cur, hunk = [], None, None
@@ -103,6 +118,22 @@ def changed_files(root, base, include_worktree=True, ignore=()):
             status[parts[-1]] = parts[0][0]
     for f in files:
         f.status = status.get(f.path, 'M')
+    if include_worktree:   # local runs: brand-new files that are not added to git yet
+        seen = {f.path for f in files}
+        for rel in git(root, 'ls-files', '--others', '--exclude-standard').splitlines():
+            if rel in seen or rel.startswith('.t7/') or any(rel.startswith(i) or f'/{i}' in rel for i in ignore):
+                continue
+            path = root / rel
+            try:
+                if path.stat().st_size > 512_000:
+                    continue
+                text = path.read_text()
+            except (OSError, UnicodeDecodeError):
+                continue   # binary or unreadable
+            lines = text.splitlines()
+            h = Hunk(1, len(lines))
+            h.added_lines = list(enumerate(lines, 1))
+            files.append(ChangedFile(path=rel, status='A', hunks=[h] if lines else []))
     return [f for f in files if (root / f.path).exists()]
 
 

@@ -38,7 +38,13 @@ def _print_human(res):
 
 def cmd_scan(a):
     from .orchestrator import scan_repo
-    res = scan_repo(base=a.base, fix=not a.no_fix, ci=a.ci, quiet=a.quiet or a.json)
+    from . import gitops
+    res = scan_repo(base=gitops.EMPTY_TREE if a.all else a.base, fix=not a.no_fix, ci=a.ci,
+                    quiet=a.quiet or a.json)
+    if res.get('no_changes') and not a.json:
+        print('Nothing changed compared with the base branch. Review the whole repository with:\n'
+              '  t7 scan --all')
+        return 0
     if a.json:
         print(json.dumps({
             'gate': res.get('gate'), 'run_id': res.get('run_id'), 'seconds': res.get('seconds'),
@@ -95,6 +101,7 @@ def cmd_doctor(a):
     print(f"token        {'set' if cfg.token else 'MISSING (T7_TOKEN) — offline mode'}")
     print(f'api          {cfg.api_url}')
     print(f"model        {cfg.llm}{' / ' + cfg.llm_model if cfg.llm_model else ''}")
+    print(f"git          {'ok' if gitops.has_commits(root) else 'no commits yet — fixes need a first commit'}")
     print(f"stack        {', '.join(prof.stack) or 'unknown'}")
     print(f"tests        {prof.test_cmd or '—'}  (L2 proofs {'on' if prof.can_prove else 'off'})")
     print(f"lint/types   {prof.lint_cmd or '—'} / {prof.type_cmd or '—'}")
@@ -119,6 +126,7 @@ def main(argv=None):
     sub = p.add_subparsers(dest='cmd', required=True)
     s = sub.add_parser('scan', help='review the current change')
     s.add_argument('--base', help='base ref (default: merge-base with origin/main)')
+    s.add_argument('--all', action='store_true', help='review the whole repository, not just the change')
     s.add_argument('--no-fix', action='store_true', help='skip fix generation')
     s.add_argument('--ci', action='store_true', help='CI mode (PR comment, committed diff only)')
     s.add_argument('--json', action='store_true')
