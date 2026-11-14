@@ -20,7 +20,7 @@ say "Triple Seven · Byteramp — installing the agent"
 say ""
 
 PY=""
-for c in python3.13 python3.12 python3.11 python3.10 python3; do
+for c in python3 python3.15 python3.14 python3.13 python3.12 python3.11 python3.10; do
   if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
     PY="$c"; break
   fi
