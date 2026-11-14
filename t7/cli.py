@@ -260,15 +260,37 @@ def _register_editors(assume_yes=False):
     print('  Restart open editors (or reload the window) to pick it up.')
 
 
+def _offer_git_init(assume_yes=False):
+    """New project folder (vibe-coding): Triple Seven reviews what git tracks, so offer to
+    start a repository here. Never in the home directory or the filesystem root."""
+    from pathlib import Path
+    here = Path.cwd().resolve()
+    if here in (Path.home().resolve(), Path(here.anchor)):
+        print('Run t7 setup inside your project folder, not in your home directory:')
+        print('  cd path/to/your-project && t7 setup\n')
+        return None
+    print(f'{here.name} is not a git repository yet. Triple Seven reviews the changes git tracks')
+    print('(nothing needs to be committed or pushed).')
+    if not (assume_yes or _yes(f'Create a git repository in {here}?')):
+        print('Skipped. Run `git init` here (or cd into a repository), then `t7 setup`.\n')
+        return None
+    p = gitops.run(['git', 'init', '-q'], str(here))
+    if p.returncode != 0:
+        print(f'git init failed: {p.stderr.strip()}', file=sys.stderr)
+        return None
+    print('✓ git repository created\n')
+    return gitops.repo_root(str(here))
+
+
 def cmd_setup(a):
     from . import access
     root = None if a.default else _root_or_none()
     print(access.WELCOME.split('\n')[0] + ' — setup\n')
     if root is None and not a.default:
-        print('You are not inside a git repository. Triple Seven connects one repository at a time:')
-        print('  cd path/to/your-repository && t7 setup\n')
-        _register_editors(a.yes)
-        return 1
+        root = _offer_git_init(a.yes)
+        if root is None:
+            _register_editors(a.yes)
+            return 1
     cfg = Config.load(root)
     if a.api_url:
         cfg.api_url = a.api_url.rstrip('/')

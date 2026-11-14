@@ -514,3 +514,19 @@ def test_mcp_scan_without_git_repo_asks_for_repo_path(tmp_path, monkeypatch):
     r = mcp.handle({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
                     'params': {'name': 't7_scan', 'arguments': {}}})
     assert r['result']['isError'] and 'repo_path' in r['result']['content'][0]['text']
+
+
+def test_setup_in_new_project_folder_offers_git_init(tmp_path, monkeypatch):
+    from t7 import cli
+    proj = tmp_path / 'Felicia'
+    proj.mkdir()
+    monkeypatch.chdir(proj)
+    monkeypatch.setattr(cli, '_browser_sign_in', lambda api, root: {
+        'token': 't7_x', 'repository': 'Felicia', 'kind': 'developer', 'expires_at': None})
+    args = type('A', (), {'default': False, 'api_url': None, 'token': False, 'no_editors': True, 'yes': True})()
+    assert cli.cmd_setup(args) == 0
+    assert (proj / '.git').is_dir()
+    # Never in the home directory.
+    monkeypatch.setattr('pathlib.Path.home', lambda: tmp_path)
+    monkeypatch.chdir(tmp_path)
+    assert cli._offer_git_init(assume_yes=True) is None and not (tmp_path / '.git').exists()

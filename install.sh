@@ -51,7 +51,9 @@ esac
 say ""
 
 # Interactive setup needs a terminal; `curl | sh` has the script on stdin, so read from /dev/tty.
-if [ -t 1 ] && [ -r /dev/tty ] && git rev-parse --show-toplevel >/dev/null 2>&1; then
+# In a project folder (git or not yet), continue straight into setup; t7 setup offers
+# `git init` for a new project. Not in $HOME: there we only show the next step.
+if [ -t 1 ] && [ -r /dev/tty ] && [ "$(pwd -P)" != "$(cd "$HOME" && pwd -P)" ]; then
   exec "$T7" setup < /dev/tty
 fi
 "$T7"
