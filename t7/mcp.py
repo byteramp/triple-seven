@@ -229,6 +229,9 @@ def _fmt_findings(last):
                      f"({loc}) · proof {f['proof_level']} · fix {fx}")
     if last.get('resolved'):
         lines.append(f"Resolved by this change: {len(last['resolved'])}")
+    if last.get('unconfirmed'):
+        lines.append(f"{last['unconfirmed']} plausible but unconfirmed hypothesis(es) kept for review in the "
+                     "portal (status: needs validation) — not findings, not part of the gate.")
     return '\n'.join(lines)
 
 

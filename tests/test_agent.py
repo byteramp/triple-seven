@@ -359,3 +359,15 @@ def test_single_commit_and_untracked_files(tmp_path, monkeypatch):
     assert [f.path for f in files] == ['other.py']
     files = gitops.changed_files(r, gitops.EMPTY_TREE)           # t7 scan --all
     assert sorted(f.path for f in files) == ['new.py', 'other.py']
+
+
+def test_mcp_config_is_not_an_llm_tool_call():
+    from t7.signals import scan
+    from t7.gitops import ChangedFile, Hunk
+    h = Hunk(1, 2)
+    h.added_lines = [(1, '{"servers": {"triple-seven": {"command": "t7", "args": ["mcp"]}}}')]
+    sigs, _ = scan([ChangedFile('src/settings.json', 'A', [h])])
+    assert not [s for s in sigs if s['kind'] == 'llm_tool_call']
+    h.added_lines = [(1, 'resp = client.chat.completions.create(model=m, tools=[refund_tool])')]
+    sigs, _ = scan([ChangedFile('app/agent.py', 'A', [h])])
+    assert [s for s in sigs if s['kind'] == 'llm_tool_call']

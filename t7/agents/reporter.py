@@ -44,7 +44,7 @@ def write_bundle(root, findings, sec_ids):
     return out
 
 
-def write_last_scan(root, findings, sec_ids, gate, seconds, resolved):
+def write_last_scan(root, findings, sec_ids, gate, seconds, resolved, unconfirmed=0):
     """Local record of the last scan (for `t7 mcp` / IDE tools). Never uploaded."""
     out = root / '.t7'
     out.mkdir(parents=True, exist_ok=True)
@@ -55,7 +55,8 @@ def write_last_scan(root, findings, sec_ids, gate, seconds, resolved):
                     'reasoning': h.reasoning})
         rows.append(row)
     (out / 'last_scan.json').write_text(json.dumps(
-        {'gate': gate, 'seconds': seconds, 'findings': rows, 'resolved': resolved}, indent=2,
+        {'gate': gate, 'seconds': seconds, 'findings': rows, 'resolved': resolved,
+         'unconfirmed': unconfirmed}, indent=2,
         default=str))
 
 

@@ -70,4 +70,5 @@ class Hypothesis:
             'recommendation': self.recommendation, 'source': self.source,
             'confidence': self.confidence, 'proof_level': self.proof_level,
             'surfaced_in_pr': surfaced, 'fix': self.fix, 'proofs': self.proofs, 'owners': self.owners,
+            'verdict': self.verdict,
         }

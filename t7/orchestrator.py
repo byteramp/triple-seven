@@ -180,6 +180,7 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                 write_bundle(root, confirmed, sec_ids)
                 result['surfaced'], result['resolved'] = surfaced, resolved
                 result['_confirmed'] = confirmed
+                result['unconfirmed'] = len(uncertain)
         tracer.flush()
         if run_id:
             result = {**result, **api.finish(
@@ -214,7 +215,7 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
     result['sec_ids'] = sec_ids
     result['seconds'] = round(time.time() - started, 1)
     write_last_scan(root, result.pop('_confirmed', []), sec_ids, result.get('gate') or {},
-                    result['seconds'], result.get('resolved', []))
+                    result['seconds'], result.get('resolved', []), result.get('unconfirmed', 0))
     result['run_id'] = run_id
     result['api_url'] = cfg.api_url
     return result

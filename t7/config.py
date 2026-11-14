@@ -31,7 +31,9 @@ class Config:
     lint_command: str = ''
     type_command: str = ''
     ignore_paths: list = field(default_factory=lambda: ['vendor/', 'node_modules/', 'dist/',
-                                                        'build/', '.venv/', 'venv/', 'migrations/'])
+                                                        'build/', '.venv/', 'venv/', 'migrations/',
+                                                        '.vscode/', '.cursor/', '.idea/', '.t7/',
+                                                        '.github/ISSUE_TEMPLATE/'])
     offline: bool = False
 
     @classmethod
