@@ -781,3 +781,12 @@ def test_check_and_hooks(tmp_path, monkeypatch, capsys):
     assert all('already' in d for d in hooks.install())       # idempotent
     hooks.uninstall()
     assert not (r / '.git' / 'hooks' / 'pre-commit').exists()
+
+
+def test_scan_all_uses_empty_tree_even_with_main_branch(repo):
+    from t7 import gitops
+    base = gitops.resolve_base(repo, gitops.EMPTY_TREE)
+    assert base == gitops.EMPTY_TREE
+    paths = {f.path for f in gitops.changed_files(repo, base)}
+    assert 'app/db.py' in paths
+    assert 'app/users.py' in paths

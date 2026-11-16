@@ -2,6 +2,13 @@
 
 Update with `t7 update`. t7 reminds you (at most once a day) when a new version is out.
 
+## 0.7.1
+- `t7 scan --all` now reviews the full repository against the empty tree, including committed files on the main branch.
+- Empty source files skip architecture model calls. Changes containing only removed lines map the remaining source.
+- An editor-only model policy requires MCP model access and correctly blocks terminal CLI selection.
+- Missing Copilot CLI reports how to use VS Code Copilot or install the terminal CLI. Model and API failures exit with a concise error.
+- Permanent request errors and missing Copilot CLI fail immediately without repeated attempts.
+
 ## 0.7.0
 - **Living threat model.** Full scans and merged changes keep your repository's architecture
   threat model current in the portal (map, threats, version timeline, auditor document).

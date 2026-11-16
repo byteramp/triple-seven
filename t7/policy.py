@@ -34,7 +34,13 @@ def apply(cfg, req, can_sample=False):
             cfg.llm, cfg.llm_model, cfg.parallel = 'client', '', 1
         else:
             from . import assistants
-            key = assistants.pick([a for a in allowed if a != 'sampling'] or None)
+            cli_allowed = [a for a in allowed if a != 'sampling']
+            if allowed and not cli_allowed:
+                raise AccessError(need + ' Start the review through the Triple Seven MCP tool in '
+                                  'Copilot Chat (Agent mode) in VS Code. The editor must enable '
+                                  'model access for Triple Seven. Terminal `t7 scan` needs a CLI '
+                                  'or another model provider allowed by your administrator.')
+            key = assistants.pick(cli_allowed or None)
             if not key:
                 names = ', '.join(assistants.label(a) for a in (allowed or assistants.ASSISTANTS) if a != 'sampling')
                 raise AccessError(need + f' No signed-in AI assistant found on this machine. Install and sign in '

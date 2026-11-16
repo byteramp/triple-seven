@@ -60,6 +60,14 @@ def _run(cmd, stdin_text, timeout, cwd):
 
 def _fail(key, p):
     err = (p.stderr or p.stdout or '').strip()[-400:]
+    if key == 'copilot' and p.returncode == 127:
+        error = AssistantError('GitHub Copilot CLI is unavailable. For Copilot in VS Code, '
+                               'run the Triple Seven MCP tool from Copilot Chat (Agent mode) '
+                               'with editor model access enabled and allowed by your model policy. '
+                               'For terminal scans, install and sign in to Copilot CLI, '
+                               'or choose Byteramp models in the portal.')
+        error.retryable = False
+        raise error
     hint = ''
     if any(w in err.lower() for w in ('login', 'log in', 'auth', 'unauthor', 'credential', 'sign in',
                                       'setupuser', 'code_assist')):

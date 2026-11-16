@@ -25,6 +25,8 @@ from . import __version__, credentials, gitops
 from .access import WELCOME, AccessError
 from .config import Config
 from .context import detect
+from .api import APIError
+from .llm import LLMError
 
 SEV_ICON = {'critical': '🟥', 'high': '🟧', 'medium': '🟨', 'low': '🟦', 'info': '⬜'}
 
@@ -569,7 +571,7 @@ def main(argv=None):
         sys.exit(0)
     try:
         sys.exit(a.fn(a))
-    except AccessError as e:
+    except (AccessError, LLMError, APIError) as e:
         print(f't7: {e}', file=sys.stderr)
         sys.exit(2)
 

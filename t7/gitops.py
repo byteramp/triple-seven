@@ -46,6 +46,8 @@ def repo_root(start='.'):
 
 
 def resolve_base(root, base=None):
+    if base == EMPTY_TREE:
+        return EMPTY_TREE
     candidates = [base] if base else []
     for var in ('GITHUB_BASE_REF', 'CI_MERGE_REQUEST_TARGET_BRANCH_NAME',
                 'BITBUCKET_PR_DESTINATION_BRANCH', 'SYSTEM_PULLREQUEST_TARGETBRANCH'):

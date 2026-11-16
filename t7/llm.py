@@ -58,7 +58,11 @@ class LLM:
                 last = LLMError('empty response')
             except Exception as e:  # noqa: BLE001
                 last = e
-            time.sleep(1.5 * (attempt + 1))
+                status = getattr(e, 'status', getattr(e, 'code', None))
+                if getattr(e, 'retryable', True) is False or status in (400, 401, 403, 404, 409, 413, 422):
+                    break
+            if attempt < retries:
+                time.sleep(1.5 * (attempt + 1))
         raise LLMError(f'{self.cfg.llm} failed for {purpose}: {last}')
 
     def json(self, purpose, system, prompt, default=None, **kw):
@@ -92,7 +96,9 @@ class LLM:
             try:
                 text, model = assistants.complete(key, system, prompt, timeout=self.cfg.step_timeout)
             except assistants.AssistantError as e:
-                raise LLMError(str(e)) from None
+                error = LLMError(str(e))
+                error.retryable = getattr(e, 'retryable', True)
+                raise error from None
             self.model = f'{key}:{model}'
             return text
         if p == 'ollama':
