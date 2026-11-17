@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 
 def run(cmd, cwd, timeout=600, env=None, check=False):
@@ -28,6 +28,7 @@ class Hunk:
     start: int
     length: int
     added_lines: list = field(default_factory=list)   # [(line_no, text)]
+    removed_lines: list = field(default_factory=list)
 
 
 @dataclass
@@ -35,6 +36,7 @@ class ChangedFile:
     path: str
     status: str                  # A, M, D, R
     hunks: list = field(default_factory=list)
+    skip_reason: str = ''
 
     @property
     def added(self):
@@ -88,14 +90,16 @@ def changed_files(root, base, include_worktree=True, ignore=()):
     if not include_worktree and has_commits(root):
         args.append('HEAD')
     out = git(root, *args)
-    files, cur, hunk = [], None, None
+    files, cur, hunk, old_path = [], None, None, ''
     for line in out.splitlines():
         if line.startswith('diff --git'):
-            cur = None
+            cur, hunk, old_path = None, None, ''
+        elif line.startswith('--- '):
+            old_path = line[4:].strip().removeprefix('a/')
         elif line.startswith('+++ '):
             path = line[4:].strip()
             if path == '/dev/null':
-                continue
+                path = old_path
             path = path[2:] if path.startswith('b/') else path
             if any(path.startswith(i) or f'/{i}' in path for i in ignore):
                 cur = None
@@ -110,6 +114,8 @@ def changed_files(root, base, include_worktree=True, ignore=()):
                 hunk = Hunk(int(m.group(1)), int(m.group(2) or 1))
                 cur.hunks.append(hunk)
                 hunk._next = hunk.start
+        elif cur is not None and hunk is not None and line.startswith('-'):
+            hunk.removed_lines.append(line[1:])
         elif cur is not None and hunk is not None and line.startswith('+') and not line.startswith('+++'):
             hunk.added_lines.append((hunk._next, line[1:]))
             hunk._next += 1
@@ -128,15 +134,17 @@ def changed_files(root, base, include_worktree=True, ignore=()):
             path = root / rel
             try:
                 if path.stat().st_size > 512_000:
+                    files.append(ChangedFile(path=rel, status='A', skip_reason='untracked file exceeds 512 KB'))
                     continue
                 text = path.read_text()
             except (OSError, UnicodeDecodeError):
-                continue   # binary or unreadable
+                files.append(ChangedFile(path=rel, status='A', skip_reason='binary or unreadable'))
+                continue
             lines = text.splitlines()
             h = Hunk(1, len(lines))
             h.added_lines = list(enumerate(lines, 1))
             files.append(ChangedFile(path=rel, status='A', hunks=[h] if lines else []))
-    return [f for f in files if (root / f.path).exists()]
+    return [f for f in files if (root / f.path).exists() or f.status == 'D']
 
 
 def read(root, path, start=None, end=None, pad=0):
@@ -197,6 +205,19 @@ def worktree(root, ref='HEAD', with_uncommitted=True):
     finally:
         run(['git', 'worktree', 'remove', '--force', str(path)], root)
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def contained_path(root, relative):
+    """Resolve a model-provided path inside the workspace, including symlinks."""
+    if not isinstance(relative, str) or not relative or '\x00' in relative:
+        raise ValueError('invalid file path')
+    part = Path(relative)
+    if part.is_absolute() or PureWindowsPath(relative).drive or relative.startswith('\\') or '..' in part.parts:
+        raise ValueError('file path must be relative to the workspace')
+    target = (root / part).resolve()
+    if not target.is_relative_to(root.resolve()):
+        raise ValueError('file path escapes the workspace')
+    return target
 
 
 def apply_patch(path, patch, check_only=False, reverse=False):

@@ -58,8 +58,9 @@ def prove_one(h, root, profile, cfg, llm, tracer):
 
             def _with(apply_fix):
                 with gitops.worktree(root) as wt:
-                    (wt / path).parent.mkdir(parents=True, exist_ok=True)
-                    (wt / path).write_text(content)
+                    target_path = gitops.contained_path(wt, path)
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    target_path.write_text(content)
                     if not apply_fix:
                         gitops.git(wt, 'add', '-N', '--', path)
                         test_patch['diff'] = gitops.git(wt, 'diff', '--no-color', '--', path)

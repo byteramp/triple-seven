@@ -2,8 +2,11 @@
 that leaves the customer's boundary, so its schema is strict and contains no
 code: ids, names, kinds, trust zones, data classes, booleans."""
 import re
+import hashlib
 
 from . import GROUND_RULES
+from .analysts import review_batches, changed_region_listing
+from ..llm import LLMError
 
 KINDS = {'service', 'datastore', 'external', 'llm', 'queue', 'function', 'client', 'iac_resource'}
 ZONES = {'internet', 'dmz', 'internal', 'restricted'}
@@ -59,13 +62,7 @@ def _clean(delta):
 def map_architecture(root, changed, signals, chain, llm, tracer, read, known=None):
     with tracer.step('mapper', 'Map the architecture delta') as h:
         focus = set(chain['focus_files'])
-        files = sorted(changed,
-                       key=lambda f: (f.path not in focus, -len(f.added)))[:25]
-        parts = []
-        for f in files:
-            body = read(root, f.path)[:5000]
-            if body.strip():
-                parts.append(f'## {f.path} (status {f.status})\n{body}')
+        files = sorted(changed, key=lambda f: (f.path not in focus, -len(f.added)))
         system = SYSTEM
         if known and known.get('components'):
             # Threat-model aware: reuse the living model's names so the organisation's model stays
@@ -74,12 +71,34 @@ def map_architecture(root, changed, signals, chain, llm, tracer, read, known=Non
                               for c in known['components'] if c.get('name'))[:4000]
             system += ('\nKnown components of this system (use these exact names when the code refers '
                        f'to them; mark components not in this list as "added"): {names}')
-        data = {}
-        if parts:
-            data = llm.json('map', system, '\n\n'.join(parts)[:60000], default={}) or {}
-        else:
+        components, flows, batches = {}, {}, 0
+        for listing in review_batches(root, files, listing_for=lambda f: (changed_region_listing(root, f, cap=None)
+                                                                                 if f.status == 'D' else read(root, f.path))):
+            data = llm.json('map', system, listing, default={})
+            if not isinstance(data, dict) or not all(isinstance(data.get(k), list)
+                                                     for k in ('components', 'flows')):
+                raise LLMError('map: invalid architecture response')
+            clean = _clean(data)
+            # Reuse component identities across batches without confusing local ids.
+            remap = {}
+            for component in clean['components']:
+                identity = f"{component['name'].casefold()}|{component['kind']}"
+                cid = 'c_' + hashlib.sha256(identity.encode()).hexdigest()[:20]
+                remap[component['id']] = cid
+                component['id'] = cid
+                components[cid] = component
+            for flow in clean['flows']:
+                flow['source'] = remap[flow['source']]
+                flow['target'] = remap[flow['target']]
+                identity = (flow['source'], flow['target'], flow['protocol'],
+                            flow['authenticated'], flow['encrypted'])
+                flow['id'] = 'f_' + hashlib.sha256(str(identity).encode()).hexdigest()[:20]
+                flows[identity] = flow
+            batches += 1
+        if not batches:
             h.skip('No non-empty source files to map')
-        delta = _clean(data)
+        h.meta(reviewed_files=[f.path for f in files], batches=batches)
+        delta = {'components': list(components.values()), 'flows': list(flows.values())}
         # Signals: kind + location only (no code) feed the threat model's code rules.
         delta['signals'] = [{'kind': s['kind'], 'file': s['file'], 'line': s['line'],
                              'detail': s['detail']} for s in signals[:200]]

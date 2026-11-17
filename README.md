@@ -1,9 +1,19 @@
 # t7 — Triple Seven agent
 
 Threat model, **verified fixes** and **proof** for every change. Runs on the
-developer's machine and in your CI. **Your source code never leaves your
-environment**: Byteramp only receives an abstract architecture model and
-finding metadata (title, file:line, fix/proof results as hashes and pass/fail).
+developer's machine and in your CI.
+
+Your organisation selects where code is analysed. Byteramp mode sends relevant
+code excerpts to Byteramp EU models. Own-provider and AI-assistant modes send
+excerpts to that provider under your account. Ollama runs model analysis locally.
+Byteramp retains review metadata (architecture, findings, file locations, proof/check
+results and step summaries). Model prompts and completions are not stored by T7.
+Metadata is redacted on the agent and server to reduce accidental code and secret
+inclusion; this is a best-effort safeguard, not a complete secret detector.
+
+Security analysis failures make the review incomplete and prevent PASS.
+Large reviews are split into bounded analysis batches. The result reports specialist
+file coverage and explicitly lists excluded files.
 
 ## Get started (developer machine)
 
@@ -203,3 +213,9 @@ Every step streams to the portal timeline.
 Every release is Sigstore-signed with a CycloneDX SBOM and SLSA provenance —
 see [RELEASING.md](RELEASING.md#how-customers-verify). Source is public so you can read
 exactly what runs on your code; what is sent to Byteramp is documented in [SECURITY.md](SECURITY.md).
+
+## Trusted connection settings
+
+Set T7_API_URL and T7_LLM_BASE_URL in your environment for custom endpoints.
+Repository .t7.json files cannot override connection endpoints or authentication state.
+Keep T7_TOKEN and T7_LLM_API_KEY in your local secret store or CI secrets.

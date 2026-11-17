@@ -28,7 +28,7 @@ from . import agent_config, policy as model_policy, updates
 from .access import AccessError, NOT_CONNECTED, REJECTED, UNREACHABLE, offline_allowed, renew_if_due
 from .config import Config
 from .context import detect
-from .llm import LLM
+from .llm import LLM, LLMError
 from .signals import scan
 from .trace import Tracer
 
@@ -84,6 +84,11 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
     api = Byteramp(cfg)
     llm = LLM(cfg, api)
     gh = (github_context() or gitlab_context()) if ci else None
+    if gh and gh['kind'] == 'github':
+        try:
+            set_github_status(gh, 'pending')
+        except Exception as error:
+            raise AccessError(f'Cannot mark the review pending in GitHub: {error}') from None
     push = push_context() if ci and not gh else None
     push_base = (push or {}).get('before') or ''
     if push_base == ZERO:
@@ -168,7 +173,7 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                     api.plan(run_id, chain)
 
                 delta = map_architecture(root, changed, signals, chain, llm, tracer,
-                                         gitops.numbered, known=policy.get('architecture'))
+                                         lambda root, path: gitops.numbered(root, path, max_lines=None), known=policy.get('architecture'))
                 hyps = []
                 if run_id:
                     with tracer.step('threat-model', 'Delta threat model (Airframe engine)') as s:
@@ -229,6 +234,30 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                 result['surfaced'], result['resolved'] = surfaced, resolved
                 result['_confirmed'] = confirmed
                 result['unconfirmed'] = len(uncertain)
+        critical = {'planner', 'mapper', 'threat-model', 'triage', 'critic'}
+        failed = [step['title'] for step in tracer.steps if step.get('status') == 'failed'
+                  and (step['agent'] in critical or step['agent'].startswith('analyst:'))]
+        if failed:
+            raise LLMError('Review incomplete: ' + '; '.join(failed[:5]))
+        reviewed = set()
+        batches = 0
+        for step in tracer.steps:
+            if step['agent'].startswith('analyst:'):
+                reviewed.update(step.get('meta', {}).get('reviewed_files', []))
+                batches += step.get('meta', {}).get('batches', 0)
+        coverage = {'changed_files': len(changed), 'reviewed_files': len(reviewed),
+                    'analysis_batches': batches, 'ignore_patterns': cfg.ignore_paths,
+                    'excluded_files': sorted({file.path for file in changed} - reviewed),
+                    'exclusion_reasons': {file.path: file.skip_reason or 'not selected for specialist review'
+                                          for file in changed if file.path not in reviewed}}
+        result['coverage'] = coverage
+        if cfg.offline:
+            blocking = [h for h in result.get('_confirmed', []) if h.severity in ('critical', 'high')]
+            uncertain = [h for h in result.get('_confirmed', []) if h.verdict == 'uncertain']
+            result['gate'] = {'verdict': 'block' if blocking else ('warn' if uncertain else 'pass')}
+        if not quiet:
+            print(f"Coverage: {len(reviewed)}/{len(changed)} changed files reviewed by specialists; "
+                  f"{len(coverage['excluded_files'])} excluded; {batches} analysis batches.", file=sys.stderr)
         tracer.flush()
         if run_id:
             result = {**result, **api.finish(
@@ -237,7 +266,7 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                 committed_patches=_committed_fixes(root),
                 rejected=memory['rejected'], reused_rejections=memory['reused'],
                 merges=merges(root, push_base) if push else [],
-                stats={'changed_files': len(changed), 'llm_calls': llm.calls,
+                stats={'coverage': coverage, 'changed_files': len(changed), 'llm_calls': llm.calls,
                        'llm_chars_in': llm.chars_in, 'llm_model': llm.model,
                        'seconds': round(time.time() - started, 1),
                        'steps': len(tracer.steps)})}
@@ -255,6 +284,11 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                 write_ci_report(root, result.get('summary_markdown'))
     except Exception as e:  # noqa: BLE001
         tracer.flush()
+        if gh and gh['kind'] == 'github':
+            try:
+                set_github_status(gh, 'block', description='Review incomplete — rerun after fixing the error')
+            except Exception:
+                pass  # The earlier pending status still prevents a stale success.
         if run_id:
             try:
                 api.finish(run_id, status='error', error=f'{type(e).__name__}: {e}')

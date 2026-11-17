@@ -1,7 +1,7 @@
-"""Triple Seven agent (t7) — runs inside the customer's boundary.
+"""Triple Seven agent.
 
-Everything that reads source code happens here. Byteramp receives only
-metadata: an abstract architecture delta, finding titles/locations, fix and
-proof results (hashes, pass/fail), and step summaries without code.
+Code excerpts go to the selected model provider (local Ollama, Byteramp or the
+customer's provider). Review metadata is sent to Byteramp. Model prompts are
+transient; metadata redaction is best effort.
 """
-__version__ = '0.7.1'
+__version__ = '0.7.2'

@@ -1,16 +1,18 @@
-"""Byteramp client. Sends metadata only — see t7/__init__.py."""
+"""Byteramp client. Metadata is persisted; opt-in model prompts are transient."""
 import json
 import re
 import urllib.error
 import urllib.request
 
 from . import __version__
+from . import metadata
+from .transport import open_request
 
 _FENCE = re.compile(r'```.*?(```|$)', re.S)
 
 
 def strip_code(text, limit=2000):
-    """Belt and braces: the backend strips code too, but we never send it."""
+    """Redact fenced code from metadata before sending it to the portal."""
     return _FENCE.sub('[code omitted]', str(text or ''))[:limit]
 
 
@@ -41,12 +43,14 @@ class Byteramp:
     def _req(self, method, path, body=None, timeout=60):
         if self.cfg.offline:
             raise APIError(0, 'offline (no T7_TOKEN)')
+        if body is not None and path != 'llm/':
+            body = metadata.clean(body)
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(
             f'{self.cfg.api_url}/tripleseven/agent/{path}', data=data, method=method,
             headers=self._headers())
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with open_request(req, timeout=timeout) as r:
                 raw = r.read()
                 return json.loads(raw) if raw else {}
         except urllib.error.HTTPError as e:
@@ -66,7 +70,7 @@ class Byteramp:
             method='POST', headers={'Content-Type': 'application/json',
                                     'User-Agent': f't7-agent/{__version__}'})
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with open_request(req, timeout=timeout) as r:
                 return json.loads(r.read() or b'{}')
         except urllib.error.HTTPError as e:
             try:

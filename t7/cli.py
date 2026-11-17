@@ -62,7 +62,7 @@ def cmd_scan(a):
         return 0
     if a.json:
         print(json.dumps({
-            'gate': res.get('gate'), 'run_id': res.get('run_id'), 'seconds': res.get('seconds'),
+            'coverage': res.get('coverage'), 'gate': res.get('gate'), 'run_id': res.get('run_id'), 'seconds': res.get('seconds'),
             'findings': [{'sec_req_id': res['sec_ids'].get(h.fingerprint), **h.to_api(True)}
                          for h in res.get('surfaced') or []],
             'resolved': res.get('resolved', []),

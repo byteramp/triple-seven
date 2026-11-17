@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from . import GROUND_RULES, SEV_RANK
 from .analysts import changed_region_listing
+from ..llm import LLMError
 
 # Verification rules adapted from Cloudflare's security-audit skill (MIT), see NOTICE.
 TRIAGE_SYSTEM = GROUND_RULES + (
@@ -148,6 +149,8 @@ def _triage_inner(h, root, changed, llm, tracer, fork):
                       f'Attack: {h.attack_scenario}\nLocation hint: {h.file_path}:{h.line_start}\n\n'
                       f'CODE:\n{ctx}')
             d = llm.json('triage', TRIAGE_SYSTEM, prompt, default={}) or {}
+            if not isinstance(d, dict) or d.get('verdict') not in ('confirmed', 'rejected', 'uncertain'):
+                raise LLMError('triage: invalid verdict')
             h.verdict = d.get('verdict') if d.get('verdict') in ('confirmed', 'rejected', 'uncertain') else 'uncertain'
             if d.get('severity') in SEV_RANK and h.verdict == 'confirmed':
                 # triage may lower severity, raising needs the critic later
@@ -185,6 +188,9 @@ def _critic_inner(h, root, changed, llm, tracer, fork):
                          f'FINDING: {h.title} ({h.severity}, {h.cwe}) at {h.file_path}:{h.line_start}\n'
                          f'Reasoning: {h.reasoning}\nTrace: {h.trace}\n\nCODE:\n{ctx}',
                          default={}) or {}
+            if not isinstance(d, dict) or (d.get('verdict') not in ('exploitable', 'blocked')
+                                           and type(d.get('refuted')) is not bool):
+                raise LLMError('critic: invalid verdict')
             raw_code = '\n'.join(l.split(' | ', 1)[1] if ' | ' in l else l for l in ctx.splitlines())
             sink = range(h.line_start or 0, (h.line_end or h.line_start or 0) + 1) if h.line_start else ()
             raw_file = read_file(root, h.file_path) if h.file_path else raw_code

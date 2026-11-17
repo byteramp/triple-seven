@@ -10,9 +10,9 @@ Windsurf, Zed …) run Triple Seven on the open repository:
     t7_apply_fix   apply a verified fix (and its regression test) to the working tree
     t7_doctor      check token, model provider and test tooling
 
-The server runs on the developer's machine, in the repository. Everything the
-agent sends to Byteramp is the same metadata as in CI — never source code
-(unless the repository opted in to Byteramp models).
+The server runs on the developer's machine. Code excerpts are sent to the selected
+model provider. Byteramp retains review metadata and processes opt-in model prompts
+transiently. Metadata redaction is best effort.
 Stdout carries ONLY protocol messages; all logging goes to stderr.
 """
 import contextlib
@@ -267,6 +267,12 @@ def tool_scan(args):
         head += f"Note for the developer: {res['update_notice']}\n"
     note = (f"\nPortal run: {res.get('run_id')}" if res.get('run_id') else
             LOCAL_ONLY)
+    coverage = res.get('coverage') or {}
+    if coverage:
+        head += (f"Coverage: {coverage['reviewed_files']}/{coverage['changed_files']} changed files "
+                 f"reviewed; {len(coverage['excluded_files'])} excluded.\n")
+        if coverage['excluded_files']:
+            head += "Excluded: " + ', '.join(coverage['excluded_files']) + "\n"
     return _text(head + _fmt_findings(_last(root)) + note)
 
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.2
+
+- Stop incomplete security reviews from passing after specialist, triage or critic failures.
+- Reject malformed model JSON and invalid fix-verification responses.
+- Prevent repository settings from redirecting connection endpoints or authentication state.
+- Refuse cross-origin HTTP redirects for model and agent requests.
+- Constrain fix and proof file paths to the workspace, including symlink targets.
+- Batch all relevant files and changed code regions. Report reviewed and excluded files.
+- Include removed controls in analysis and redact metadata before upload.
+- Clarify which model provider processes code excerpts and which metadata is retained.
+- Custom API/model endpoints now require environment settings rather than .t7.json.
+
+
 Update with `t7 update`. t7 reminds you (at most once a day) when a new version is out.
 
 ## 0.7.1

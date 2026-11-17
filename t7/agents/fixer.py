@@ -35,19 +35,30 @@ RECHECK_SYSTEM = GROUND_RULES + (
 
 def apply_edits(wt, edits):
     """Apply exact search/replace edits. Returns (ok, error)."""
+    targets = []
     for e in edits:
         path, find, repl = e.get('file', ''), e.get('find', ''), e.get('replace', '')
-        if not path or not find or '..' in path.split('/'):
+        try:
+            target = gitops.contained_path(wt, path)
+        except (ValueError, OSError) as error:
+            return False, str(error)
+        if not isinstance(find, str) or not find or not isinstance(repl, str):
             return False, f'invalid edit for {path!r}'
-        target = wt / path
-        if not target.exists():
+        targets.append((target, path, find, repl))
+    # Validate every target before any writes, and retain sequential edits to a file.
+    texts = {}
+    for target, path, find, repl in targets:
+        if not target.is_file():
             return False, f'{path} does not exist'
-        text = target.read_text()
+        text = texts.get(target)
+        if text is None:
+            text = target.read_text()
         n = text.count(find)
         if n != 1:
-            return False, (f"'find' text matched {n} times in {path} "
-                           '(must match exactly once — copy it verbatim, without line numbers)')
-        target.write_text(text.replace(find, repl, 1))
+            return False, f"'find' text matched {n} times in {path} (must match exactly once)"
+        texts[target] = text.replace(find, repl, 1)
+    for target, text in texts.items():
+        target.write_text(text)
     return True, ''
 
 
@@ -158,12 +169,17 @@ class Verifier:
             sigs, _ = scan(changed)
             still = [s for s in sigs if h.rule == f"signal.{s['kind']}" and s['file'] == h.file_path]
             # recheck 2: independent model re-triage of the patched code
-            listing = '\n\n'.join(f'## {c.path}\n{changed_region_listing(wt, c, 30, 9000)}'
+            listing = '\n\n'.join(f'## {c.path}\n{changed_region_listing(wt, c, 30, 9000, include_removed=False)}'
                                   for c in changed)
             d = self.llm.json('critic', RECHECK_SYSTEM,
                               f'FINDING: {h.title} ({h.cwe})\n{h.description}\n\nPATCHED CODE:\n{listing}',
                               default={}) or {}
-            vulnerable = bool(d.get('still_vulnerable')) or bool(still)
+            valid = isinstance(d, dict) and all(type(d.get(k)) is bool
+                                                for k in ('still_vulnerable', 'breaks_behaviour'))
+            if not valid:
+                checks['recheck'] = 'fail'
+                return checks, 'Verifier returned an invalid response; fix is unverified.', patch
+            vulnerable = d['still_vulnerable'] or bool(still)
             checks['recheck'] = 'fail' if vulnerable or d.get('breaks_behaviour') else 'pass'
             if checks['recheck'] == 'fail':
                 notes.append(f"RECHECK FAILED: {d.get('why', 'detector still fires')}")

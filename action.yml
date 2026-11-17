@@ -1,7 +1,7 @@
 name: Triple Seven
 description: >
   Threat model, verified fixes and proof for every pull request.
-  Runs entirely in your runner — your source code never leaves your environment.
+  Runs in your runner. Code excerpts go to the model selected by your organisation; review metadata is sent to Byteramp.
 branding:
   icon: shield
   color: blue

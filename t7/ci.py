@@ -56,10 +56,10 @@ def merges(root, base):
 def set_github_status(ctx, verdict, target_url='', description=''):
     """Commit status 'Triple Seven' on the PR head. Protect the branch on this status: unlike a
     job result it flips to success when a /t7 decision clears the gate."""
-    state = {'pass': 'success', 'warn': 'success', 'block': 'failure'}.get(verdict, 'error')
+    state = {'pass': 'success', 'warn': 'success', 'block': 'failure', 'pending': 'pending'}.get(verdict, 'error')
     body = {'state': state, 'context': 'Triple Seven',
             'description': (description or {'pass': 'No blocking SEC-REQs', 'warn': 'Open SEC-REQs (advisory)',
-                                             'block': 'Blocking SEC-REQs — fix or decide'}[verdict])[:140]}
+                                             'block': 'Blocking SEC-REQs — fix or decide', 'pending': 'Security review in progress'}.get(verdict, 'Review incomplete'))[:140]}
     if target_url:
         body['target_url'] = target_url
     req = urllib.request.Request(f"{ctx['api']}/repos/{ctx['repo']}/statuses/{ctx['head_sha']}",

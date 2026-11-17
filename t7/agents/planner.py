@@ -42,7 +42,7 @@ def plan(changed, areas, signals, profile, llm, tracer, use_llm=True):
             sp = AREA_TO_SPECIALIST.get(a)
             if sp:
                 selected.setdefault(sp, f'deterministic: {a} patterns in added lines')
-        code_files = [f for f in changed if f.added]
+        code_files = [f for f in changed if f.hunks]
         risk = 'high' if {'authz', 'llm', 'secrets'} & areas else ('medium' if areas else 'low')
         focus = sorted({s['file'] for s in signals})
 

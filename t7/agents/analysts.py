@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from . import GROUND_RULES, Hypothesis
 from .checklists import checklist
 from .planner import SPECIALISTS
+from ..llm import LLMError
 
 SPEC_FILES = {
     'iac': lambda p: p.endswith(('.tf', '.yaml', '.yml', 'Dockerfile', '.json')),
@@ -15,6 +16,7 @@ SPEC_FILES = {
 
 SYSTEM_TMPL = GROUND_RULES + (
     "\nYou are the {name} SPECIALIST. Scope: {scope}.\nChecklist: {checklist}\n"
+    "Lines marked -- removed are deleted code, not active code. Review the security impact of removals. "
     "Review ONLY the changed regions marked with '>>' and their direct context. Report real, "
     "exploitable weaknesses introduced or exposed by this change. Return JSON: "
     "{{\"findings\": [{{\"title\", \"severity\": critical|high|medium|low, \"cwe\": \"CWE-n\", "
@@ -42,12 +44,17 @@ def fingerprint(*parts):
     return hashlib.sha256('|'.join(str(p) for p in parts).encode()).hexdigest()
 
 
-def changed_region_listing(root, f, context=25, cap=7000):
+def changed_region_listing(root, f, context=25, cap=7000, include_removed=True):
     try:
         lines = (root / f.path).read_text(errors='replace').splitlines()
     except OSError:
-        return ''
+        if f.status != 'D':
+            raise
+        lines = []
     marked = {ln for ln, _ in f.added}
+    for hunk in f.hunks:
+        if include_removed and hunk.removed_lines and lines:
+            marked.add(min(max(1, hunk.start), len(lines)))
     keep = set()
     for ln in marked:
         keep.update(range(max(1, ln - context), min(len(lines), ln + context) + 1))
@@ -57,24 +64,52 @@ def changed_region_listing(root, f, context=25, cap=7000):
             out.append('  ...')
         out.append(f"{'>>' if i in marked else '  '}{i:>5} | {lines[i - 1]}")
         prev = i
-    return '\n'.join(out)[:cap]
+    removed = [f'-- removed near line {hunk.start} | {line}'
+               for hunk in f.hunks for line in hunk.removed_lines] if include_removed else []
+    return '\n'.join(out + removed)[:cap]
+
+
+
+def review_batches(root, files, context=25, listing_for=None):
+    """Cover every changed region with overlapping bounded model inputs."""
+    batch, size = [], 0
+    for file in files:
+        listing = (listing_for(file) if listing_for else
+                   changed_region_listing(root, file, context=context, cap=None))
+        for start in range(0, len(listing), 5600):
+            excerpt = listing[start:start + 6000]
+            part = f'## {file.path} (status {file.status}, excerpt {start // 5600 + 1})\n{excerpt}'
+            if batch and size + len(part) > 36000:
+                yield '\n\n'.join(batch)
+                batch, size = [], 0
+            batch.append(part)
+            size += len(part) + 2
+    if batch:
+        yield '\n\n'.join(batch)
 
 
 def _run_one(name, why, files, root, llm, tracer, fork):
     with fork:
         with tracer.step(f'analyst:{name}', f'{name} review', why=why) as h:
             pick = SPEC_FILES.get(name, lambda p: not p.endswith(('.md', '.lock', '.svg')))
-            relevant = [f for f in files if f.added and pick(f.path)][:20]
+            relevant = [f for f in files if f.hunks and pick(f.path)]
             if not relevant:
                 h.skip('no relevant files in this diff')
                 return []
-            listing = '\n\n'.join(f'## {f.path}\n{changed_region_listing(root, f)}'
-                                  for f in relevant)[:70000]
             system = SYSTEM_TMPL.format(name=name.upper(), scope=SPECIALISTS[name],
                                         checklist=checklist(name))
-            data = llm.json('analyze', system, listing, default={}) or {}
+            findings, batches = [], 0
+            for listing in review_batches(root, relevant):
+                data = llm.json('analyze', system, listing, default={})
+                if not isinstance(data, dict) or not isinstance(data.get('findings'), list):
+                    raise LLMError(f'{name}: invalid findings response')
+                findings.extend(data['findings'])
+                batches += 1
+            h.meta(reviewed_files=[f.path for f in relevant], batches=batches)
             out = []
-            for item in (data.get('findings') or [])[:6]:
+            for item in findings:
+                if not isinstance(item, dict):
+                    raise LLMError(f'{name}: malformed finding')
                 path = str(item.get('file', ''))
                 if not any(path == f.path for f in relevant):
                     continue  # hallucinated path → drop
@@ -105,9 +140,7 @@ def run_analysts(chain, changed, root, llm, tracer, parallel=4):
             futs = [ex.submit(_run_one, s['name'], s['why'], changed, root, llm, tracer,
                               tracer.fork()) for s in specs]
             results = []
-            for f in futs:
-                try:
-                    results.extend(f.result())
-                except Exception:  # noqa: BLE001 — one failed specialist must not sink the run
-                    pass
+            # Propagate analysis failures after workers finish; partial results cannot pass.
+            for future in futs:
+                results.extend(future.result())
     return results

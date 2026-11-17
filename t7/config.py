@@ -56,7 +56,9 @@ class Config:
         if f and f.exists():
             try:
                 for k, v in json.loads(f.read_text()).items():
-                    if hasattr(c, k) and k not in ('token', 'llm_api_key'):  # secrets: env only
+                    if hasattr(c, k) and k not in ('token', 'llm_api_key', 'api_url', 'llm_base_url',
+                                                     'offline', 'token_source', 'token_key', 'token_kind',
+                                                     'token_expires_at', 'remote', 'repo_name', 'context'):  # secrets: env only
                         setattr(c, k, v)
             except (ValueError, OSError):
                 pass

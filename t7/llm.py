@@ -14,6 +14,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from .transport import open_request
 
 
 class LLMError(RuntimeError):
@@ -72,8 +73,10 @@ class LLM:
         if data is None:  # one repair round
             text = self.complete(purpose, 'Convert the input into valid JSON. Output JSON only.',
                                  text[:12000], json_mode=True)
-            data = extract_json(text, default)
-        return data if data is not None else default
+            data = extract_json(text, None)
+        if data is None:
+            raise LLMError(f'{purpose}: invalid JSON after repair; review cannot be verified')
+        return data
 
     # ── providers ──────────────────────────────────────────────────────────
     def _dispatch(self, purpose, system, prompt, json_mode, max_tokens, temperature):
@@ -135,7 +138,7 @@ class LLM:
     def _post(self, url, headers, payload, timeout=240):
         req = urllib.request.Request(url, data=json.dumps(payload).encode(), method='POST',
                                      headers={'Content-Type': 'application/json', **headers})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with open_request(req, timeout=timeout) as r:
             return json.loads(r.read())
 
     def _openai_compat(self, system, prompt, json_mode, max_tokens, temperature):

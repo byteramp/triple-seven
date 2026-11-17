@@ -26,7 +26,7 @@ def test_empty_file_skips_model_and_preserves_signals():
 
 def test_removal_only_change_maps_remaining_source():
     model = Mock()
-    model.json.return_value = {}
+    model.json.return_value = {'components': [], 'flows': []}
     map_architecture(None, [ChangedFile('app.py', 'M')], [], {'focus_files': []},
                      model, Tracer(quiet=True), lambda *args: '1 | remaining_source()')
     assert 'remaining_source()' in model.json.call_args.args[2]
