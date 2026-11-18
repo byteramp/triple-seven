@@ -10,7 +10,13 @@
 - Match DES and ECB as complete algorithm names instead of parts of ordinary words.
 - Clarify Copilot setup, Auto model selection and account usage limits.
 
-This release fixes Copilot routing and review reliability. Large first-time Byteramp scans on CPU still require performance work; no few-minute completion guarantee is claimed.
+- Replace repeated whole-source AI passes for first baselines with local checks and bounded, targeted verification of candidate risk paths.
+- Use structured responses and locally matched evidence, with independent challenge of medium and higher confirmations.
+- Report local coverage, exclusions and unresolved hypotheses explicitly; unresolved baseline risks produce a warning.
+- Keep contextual change reviews and before/after fix proof. Fix preparation and test execution add time beyond baseline assessment.
+- Preserve VS Code JSONC configuration by using its supported MCP registration command.
+
+The baseline is local rule coverage with targeted AI verification, not a semantic AI audit of every source line. Custom cross-function flows and risks outside the supported rules remain limitations. Completion time depends on repository risk paths, server load, model access and optional fix/test work.
 
 ## 0.7.4
 

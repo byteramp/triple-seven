@@ -49,6 +49,8 @@ class LLM:
         self.calls = 0
         self.chars_in = 0
         self._lock = threading.Lock()
+        self._local = threading.local()
+        self.models_by_purpose = {}
 
     def complete(self, purpose, system, prompt, *, json_mode=False, max_tokens=2000,
                  temperature=0.1, retries=2):
@@ -60,6 +62,8 @@ class LLM:
             try:
                 text = self._dispatch(purpose, system, prompt, json_mode, max_tokens, temperature)
                 if text:
+                    with self._lock:
+                        self.models_by_purpose.setdefault(purpose, set()).add(getattr(self._local, 'model', self.model))
                     return text
                 last = LLMError('empty response')
             except Exception as e:  # noqa: BLE001
@@ -72,8 +76,9 @@ class LLM:
         raise LLMError(f'{self.cfg.llm} failed for {purpose}: {last}')
 
     def json(self, purpose, system, prompt, default=None, **kw):
+        schema = kw.pop('schema', None)
         text = self.complete(purpose, system + '\nRespond with JSON only.', prompt,
-                             json_mode=True, **kw)
+                             json_mode=schema or True, **kw)
         data = extract_json(text, None)
         if data is None:  # one repair round
             text = self.complete(purpose, 'Convert the input into valid JSON. Output JSON only.',
@@ -86,15 +91,18 @@ class LLM:
     # ── providers ──────────────────────────────────────────────────────────
     def _dispatch(self, purpose, system, prompt, json_mode, max_tokens, temperature):
         p = self.cfg.llm
+        self._local.model = self.cfg.llm_model or self.model
         if p == 'byteramp':
             r = self.api.llm(purpose, system, prompt, json_mode, max_tokens, temperature)
             self.model = r.get('model') or self.model
+            self._local.model = self.model
             return r.get('text', '')
         if p == 'client':
             from .mcp import sample
             text, model = sample(system, prompt, max_tokens, temperature)
             if model:
                 self.model = f'client:{model}'
+                self._local.model = self.model
             return text
         if p == 'assistant':
             from . import assistants
@@ -108,6 +116,7 @@ class LLM:
                 error.retryable = getattr(e, 'retryable', True)
                 raise error from None
             self.model = f'{key}:{model}'
+            self._local.model = self.model
             return text
         if p == 'ollama':
             return self._ollama(system, prompt, json_mode, max_tokens, temperature)
@@ -129,7 +138,7 @@ class LLM:
                    'options': {'temperature': temperature, 'num_predict': max_tokens,
                                'num_ctx': int(os.environ.get('T7_NUM_CTX', '16384'))}}
         if json_mode:
-            payload['format'] = 'json'
+            payload['format'] = json_mode if isinstance(json_mode, dict) else 'json'
         # Reasoning models (Qwen3/3.5, gpt-oss, DeepSeek-R1) otherwise spend the token budget
         # thinking and return an empty answer. gpt-oss cannot turn thinking off, only down.
         think = os.environ.get('T7_THINK', '').lower()
@@ -138,6 +147,10 @@ class LLM:
         else:
             payload['think'] = think in ('1', 'true', 'yes')
         data = self._post(f'{base}/api/chat', {}, payload, timeout=900)
+        if data.get('done_reason') == 'length':
+            error = LLMError('Model response exceeded its output limit; review incomplete')
+            error.retryable = False
+            raise error
         return (data.get('message') or {}).get('content', '')
 
     def _post(self, url, headers, payload, timeout=240):

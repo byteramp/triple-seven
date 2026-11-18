@@ -88,6 +88,30 @@ def _json_target(label, path, section, entry):
     return label, 'added', str(path)
 
 
+def _vscode_target(label, user_dir, entry):
+    result = _json_target(label, user_dir / 'mcp.json', 'servers', entry)
+    if result[1] != 'manual':
+        return result
+    executable = shutil.which('code-insiders' if 'Insiders' in label else 'code')
+    if not executable and platform.system() == 'Darwin':
+        app = 'Visual Studio Code - Insiders' if 'Insiders' in label else 'Visual Studio Code'
+        candidate = Path('/Applications') / (app + '.app') / 'Contents/Resources/app/bin/code'
+        if candidate.is_file():
+            executable = str(candidate)
+    if not executable:
+        return result
+    try:
+        completed = subprocess.run(
+            [executable, '--user-data-dir', str(user_dir.parent), '--add-mcp',
+             json.dumps({'name': NAME, **entry})],
+            capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return result
+    if completed.returncode:
+        return result
+    return label, 'added', 'Registered through VS Code; existing comments preserved'
+
+
 def detect():
     """[(label, register_fn)] for the editors that are installed."""
     cmd = t7_command()
@@ -95,7 +119,7 @@ def detect():
     for label, user_dir in _vscode_user_dirs():
         if user_dir.exists():
             entry = {'type': 'stdio', 'command': cmd, 'args': ['mcp', '--assistant', 'copilot']}
-            found.append((label, lambda l=label, d=user_dir, e=entry: _json_target(l, d / 'mcp.json', 'servers', e)))
+            found.append((label, lambda l=label, d=user_dir, e=entry: _vscode_target(l, d, e)))
     if shutil.which('copilot'):
         entry = {'type': 'stdio', 'command': cmd, 'args': ['mcp', '--assistant', 'copilot']}
         found.append(('Copilot', lambda e=entry: _json_target('Copilot', _home() / '.copilot' / 'mcp-config.json',

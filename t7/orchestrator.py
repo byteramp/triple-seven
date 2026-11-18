@@ -156,6 +156,8 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
     memory = {'rejected': [], 'reused': []}
     rejections = frozenset(policy.get('rejections', []))
     owners = CodeOwners.load(root)
+    baseline_mode = base_sha == gitops.EMPTY_TREE
+    local_methods, local_hypotheses, hyps = {}, [], []
     try:
         with tracer.step('orchestrator', f'Review {len(changed)} changed file(s)',
                          base=base_sha[:12], head=head[:12]) as root_step:
@@ -164,31 +166,65 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                 result['no_changes'] = True
             else:
                 signals, areas = scan(changed)
+                cfg_signals = []
+                baseline_mode = base_sha == gitops.EMPTY_TREE
+                local_methods = {}
+                local_hypotheses = []
                 # MCP / agent settings: when they change, or on a full scan — not on every PR.
                 if base_sha == gitops.EMPTY_TREE or agent_config.touched(root, base_sha, include_worktree=not ci):
                     cfg_signals, cfg_areas = agent_config.scan_repo(root)
                     signals, areas = signals + cfg_signals, areas | cfg_areas
-                chain = plan(changed, areas, signals, profile, llm, tracer)
+                if baseline_mode:
+                    from .baseline import discover
+                    with tracer.step('detectors', 'Index all baseline source files locally') as step:
+                        local_hypotheses, signals, local_areas, local_methods = discover(root, changed, cfg_signals)
+                        areas |= local_areas
+                        step.meta(local_files=len(local_methods), candidates=len(local_hypotheses), methods=local_methods)
+                        step.summary(f'{len(local_methods)} files indexed; {len(local_hypotheses)} candidate risk paths')
+                if baseline_mode:
+                    from .baseline import plan_baseline
+                    chain = plan_baseline(profile, local_hypotheses, tracer)
+                else:
+                    chain = plan(changed, areas, signals, profile, llm, tracer)
+                if baseline_mode:
+                    chain['review_mode'] = 'local-baseline-targeted-ai'
+                    chain['steps'] = ['local-index', 'source-inventory', 'threat-model', 'targeted-verification', 'critic', 'fix+verify', 'report']
                 if run_id:
                     api.plan(run_id, chain)
 
-                delta = map_architecture(root, changed, signals, chain, llm, tracer,
-                                         lambda root, path: gitops.numbered(root, path, max_lines=None), known=policy.get('architecture'))
+                if baseline_mode:
+                    from .baseline import architecture_inventory
+                    with tracer.step('mapper', 'Update the local source inventory') as step:
+                        delta = architecture_inventory(changed, signals, policy.get('architecture'))
+                        step.meta(method='local-source-index', runtime_boundaries_inferred=False)
+                        step.summary(f"{len(delta['components'])} source modules; runtime network flows not inferred")
+                else:
+                    delta = map_architecture(root, changed, signals, chain, llm, tracer,
+                                             lambda root, path: gitops.numbered(root, path, max_lines=None), known=policy.get('architecture'))
                 hyps = []
                 if run_id:
                     with tracer.step('threat-model', 'Delta threat model (Airframe engine)') as s:
-                        tm = api.architecture(run_id, delta, enrich=enrich)
-                        hyps += [_hyp_from_threat(t) for t in tm.get('threats', [])]
+                        tm = api.architecture(run_id, delta, enrich=enrich and not baseline_mode)
+                        if not baseline_mode:
+                            hyps += [_hyp_from_threat(t) for t in tm.get('threats', [])]
                         s.summary(f"{len(hyps)} hypotheses from {tm['stats']['components']} "
                                   f"components / {tm['stats']['flows']} flows")
                 else:
                     tracer.skip('threat-model', 'Delta threat model', 'offline — local analysis only')
 
-                hyps += run_analysts(chain, changed, root, llm, tracer, cfg.parallel)
+                if baseline_mode:
+                    hyps += local_hypotheses
+                else:
+                    hyps += run_analysts(chain, changed, root, llm, tracer, cfg.parallel)
                 for h in hyps:
                     h.suppressed = h.suppressed or h.fingerprint in suppressed
-                hyps = triage_all(hyps, root, changed, llm, tracer, cfg.parallel,
-                                  rejections=rejections, memory=memory)
+                if baseline_mode:
+                    from .baseline_verify import verify as verify_baseline
+                    hyps = verify_baseline(hyps, root, changed, llm, tracer, cfg.parallel,
+                                           rejections=rejections, memory=memory)
+                else:
+                    hyps = triage_all(hyps, root, changed, llm, tracer, cfg.parallel,
+                                      rejections=rejections, memory=memory)
                 confirmed = [h for h in hyps if h.verdict == 'confirmed' and not h.suppressed]
                 for h in hyps:
                     if h.file_path:
@@ -221,7 +257,7 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                 budget = int(policy.get('noise_budget') or 5)
                 surfaced, rest = select_for_pr(confirmed, budget)
                 uncertain = [h for h in hyps if h.verdict == 'uncertain' and not h.suppressed
-                             and h.rank >= SEV_RANK['high']]
+                             and (baseline_mode or h.rank >= SEV_RANK['high'])]
                 if run_id:
                     with tracer.step('reporter', 'Record findings, fixes and proofs') as s:
                         payload = ([h.to_api(True) for h in surfaced] + [h.to_api(False) for h in rest]
@@ -234,7 +270,7 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                 result['surfaced'], result['resolved'] = surfaced, resolved
                 result['_confirmed'] = confirmed
                 result['unconfirmed'] = len(uncertain)
-        critical = {'planner', 'mapper', 'threat-model', 'triage', 'critic'}
+        critical = {'detectors', 'planner', 'mapper', 'threat-model', 'triage', 'critic'}
         failed = [step['title'] for step in tracer.steps if step.get('status') == 'failed'
                   and (step['agent'] in critical or step['agent'].startswith('analyst:'))]
         if failed:
@@ -242,20 +278,32 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
         reviewed = set()
         batches = 0
         for step in tracer.steps:
-            if step['agent'].startswith('analyst:'):
+            if step['agent'].startswith('analyst:') or (baseline_mode and step['agent'] == 'triage'):
                 reviewed.update(step.get('meta', {}).get('reviewed_files', []))
-                batches += step.get('meta', {}).get('batches', 0)
+                batches += step.get('meta', {}).get('batches', int(baseline_mode and step['agent'] == 'triage'))
         coverage = {'changed_files': len(changed), 'reviewed_files': len(reviewed),
                     'analysis_batches': batches, 'ignore_patterns': cfg.ignore_paths,
                     'excluded_files': sorted({file.path for file in changed} - reviewed),
                     'exclusion_reasons': {file.path: file.skip_reason or 'not selected for specialist review'
                                           for file in changed if file.path not in reviewed}}
+        if baseline_mode:
+            coverage.update(review_method='local-baseline-targeted-ai',
+                            locally_checked_files=sum(not file.skip_reason for file in changed), local_methods=local_methods,
+                            candidate_paths=len(local_hypotheses),
+                            unverified_paths=sum(h.verdict == 'uncertain' and not h.suppressed for h in hyps),
+                            architecture_method='source-inventory; runtime boundaries not inferred',
+                            limits='Local rule coverage with within-function Python source-flow checks. Custom cross-function flows and unmatched semantic risks are not fully analysed by the baseline; contextual change reviews remain separate.')
+            coverage['excluded_files'] = [file.path for file in changed if file.skip_reason]
+            coverage['exclusion_reasons'] = {file.path: file.skip_reason for file in changed if file.skip_reason}
         result['coverage'] = coverage
         if cfg.offline:
             blocking = [h for h in result.get('_confirmed', []) if h.severity in ('critical', 'high')]
-            uncertain = [h for h in result.get('_confirmed', []) if h.verdict == 'uncertain']
+            uncertain = [h for h in hyps if h.verdict == 'uncertain' and not h.suppressed] if baseline_mode else [h for h in result.get('_confirmed', []) if h.verdict == 'uncertain']
             result['gate'] = {'verdict': 'block' if blocking else ('warn' if uncertain else 'pass')}
-        if not quiet:
+        if not quiet and baseline_mode:
+            print(f"Coverage: {coverage['locally_checked_files']} files checked locally; {len(reviewed)} files had targeted AI verification; "
+                  f"{coverage.get('unverified_paths', 0)} risk paths still need validation.", file=sys.stderr)
+        elif not quiet:
             print(f"Coverage: {len(reviewed)}/{len(changed)} changed files reviewed by specialists; "
                   f"{len(coverage['excluded_files'])} excluded; {batches} analysis batches.", file=sys.stderr)
         tracer.flush()
@@ -268,6 +316,7 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                 merges=merges(root, push_base) if push else [],
                 stats={'coverage': coverage, 'changed_files': len(changed), 'llm_calls': llm.calls,
                        'llm_chars_in': llm.chars_in, 'llm_model': llm.model,
+                       'models_by_purpose': {key: sorted(values) for key, values in llm.models_by_purpose.items()},
                        'seconds': round(time.time() - started, 1),
                        'steps': len(tracer.steps)})}
             if gh and result.get('summary_markdown'):

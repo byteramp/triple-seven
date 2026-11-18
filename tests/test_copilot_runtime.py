@@ -7,6 +7,24 @@ from t7.config import Config
 from t7.access import AccessError
 
 
+def test_vscode_jsonc_uses_supported_registration(monkeypatch, tmp_path):
+    from t7 import editors
+    user_dir = tmp_path / 'Code' / 'User'
+    user_dir.mkdir(parents=True)
+    original = '{// existing comment\n"servers": {}}'
+    (user_dir / 'mcp.json').write_text(original)
+    monkeypatch.setattr(editors.shutil, 'which', lambda _: '/bin/code')
+    run = Mock(return_value=SimpleNamespace(returncode=0))
+    monkeypatch.setattr(editors.subprocess, 'run', run)
+    entry = {'command': '/bin/t7', 'args': ['mcp', '--assistant', 'copilot']}
+    result = editors._vscode_target('VS Code', user_dir, entry)
+    assert result[1] == 'added'
+    args = run.call_args.args[0]
+    assert args[:4] == ['/bin/code', '--user-data-dir', str(user_dir.parent), '--add-mcp']
+    assert json.loads(args[4]) == {'name': 'triple-seven', **entry}
+    assert (user_dir / 'mcp.json').read_text() == original
+
+
 def test_auto_router_result_uses_final_completed_response():
     events=[{'type':'assistant.message','data':{'content':'draft','model':'draft'}},
             {'type':'assistant.message','data':{'content':'{ "ok": true }','model':'available-model'}},

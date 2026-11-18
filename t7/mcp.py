@@ -303,7 +303,11 @@ def tool_scan(args):
     note = (f"\nPortal run: {res.get('run_id')}" if res.get('run_id') else
             LOCAL_ONLY)
     coverage = res.get('coverage') or {}
-    if coverage:
+    if coverage.get('review_method') == 'local-baseline-targeted-ai':
+        head += (f"Coverage: {coverage['locally_checked_files']} files checked locally; "
+                 f"{coverage['reviewed_files']} files had targeted AI checks; "
+                 f"{coverage.get('unverified_paths', 0)} risk paths still need validation.\n")
+    elif coverage:
         head += (f"Coverage: {coverage['reviewed_files']}/{coverage['changed_files']} changed files "
                  f"reviewed; {len(coverage['excluded_files'])} excluded.\n")
         if coverage['excluded_files']:

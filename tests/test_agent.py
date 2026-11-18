@@ -795,6 +795,9 @@ def test_scan_all_uses_empty_tree_even_with_main_branch(repo):
 def test_mcp_cancelled_sampling_returns_failed_review(repo, monkeypatch):
     """A real MCP conversation must stop after one cancelled model request."""
     from t7 import mcp
+    # A full baseline requests AI only for a locally identified risk path.
+    (repo / 'app' / 'endpoint.py').write_text('def view(request):\n    return open(request.GET["path"]).read()\n')
+    _git(repo, 'add', 'app/endpoint.py')
     monkeypatch.setenv('T7_LLM', 'client')
     monkeypatch.setattr(llm_mod.LLM, '_dispatch', _ORIG_DISPATCH)
     monkeypatch.setattr(mcp.SESSION, 'seq', 0)

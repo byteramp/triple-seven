@@ -82,6 +82,14 @@ canonical remote.
 | `t7 update` | update to the latest release (t7 reminds you once a day) |
 | `t7 logout` | remove the stored token for this repository |
 
+## First baseline and later changes
+
+`t7 scan --all --no-fix` checks repository source files locally and applies AI verification to risk paths identified by the supported rules. It does not send every source line to AI. Python checks recognize request/tool arguments and model/network outputs within functions; pattern checks cover other supported languages and configuration. Custom cross-function flows and unmatched semantic risks are outside the baseline's complete coverage.
+
+Confirmed findings still face an independent critic. Unverified paths remain visible and make the baseline warn. Local source inventory nodes do not assert runtime network flows or trust boundaries.
+
+Use `t7 scan` for later changes: contextual specialist reviews remain in place. `--all` with fix preparation enabled also runs the fix and project-check stages, whose time depends on the project. Proposed changes are prepared separately; the working copy stays untouched until a fix is applied.
+
 ## In your editor / AI assistant (MCP)
 
 `t7 setup` registers `t7 mcp` (a Model Context Protocol server) for you. Tools:
