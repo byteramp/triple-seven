@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.4
+
+- Bound Byteramp architecture and specialist inputs to smaller batches while preserving source coverage.
+- Reduce Byteramp planner input size and retain the sampled file index.
+- Publish step starts and per-batch progress immediately to the portal and MCP client.
+- Honour server retryability instructions so expensive model timeouts are not repeated unchanged.
+- Explain the difference between fast local checks, change reviews and full baseline reviews.
+
 ## 0.7.3
 
 - Report rejected, cancelled and failed editor model requests with setup instructions instead of misleading JSON-repair errors.

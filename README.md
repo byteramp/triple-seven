@@ -128,6 +128,18 @@ After `t7 update`, reload the editor or restart its Triple Seven MCP connection 
 
 Manual configuration (if you skipped it): `t7 editors --show`.
 
+## Scan duration and progress
+
+`t7 check` is the fast, model-free check. `t7 scan` reviews the current change;
+`t7 scan --all` reviews the entire repository. With fix preparation enabled,
+T7 also verifies proposed patches and runs available checks. A full baseline can
+take substantially longer than a change review, especially with CPU-hosted models.
+
+Byteramp model inputs are split into smaller batches with complete source coverage.
+The editor and portal show each batch starting and finishing. A model timeout stops
+that request instead of automatically repeating the same oversized input. A failed
+or interrupted run is not a completed security review.
+
 ## Token lifetime
 
 | Token | Lifetime | Renewal |

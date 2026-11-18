@@ -17,10 +17,11 @@ def strip_code(text, limit=2000):
 
 
 class APIError(RuntimeError):
-    def __init__(self, status, detail):
+    def __init__(self, status, detail, *, retryable=True):
         super().__init__(f'{status}: {detail}')
         self.status = status
         self.detail = detail
+        self.retryable = retryable
 
 
 class Byteramp:
@@ -55,10 +56,13 @@ class Byteramp:
                 return json.loads(raw) if raw else {}
         except urllib.error.HTTPError as e:
             try:
-                detail = json.loads(e.read()).get('detail', '')
+                body = json.loads(e.read())
+                detail = body.get('detail', '')
+                retryable = body.get('retryable') is not False
             except Exception:  # noqa: BLE001
                 detail = e.reason
-            raise APIError(e.code, detail) from None
+                retryable = True
+            raise APIError(e.code, detail, retryable=retryable) from None
         except urllib.error.URLError as e:
             raise APIError(0, str(e.reason)) from None
 

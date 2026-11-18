@@ -6,7 +6,7 @@ import hashlib
 
 from . import GROUND_RULES
 from .analysts import review_batches, changed_region_listing
-from ..llm import LLMError
+from ..llm import LLMError, input_budget
 
 KINDS = {'service', 'datastore', 'external', 'llm', 'queue', 'function', 'client', 'iac_resource'}
 ZONES = {'internet', 'dmz', 'internal', 'restricted'}
@@ -72,9 +72,12 @@ def map_architecture(root, changed, signals, chain, llm, tracer, read, known=Non
             system += ('\nKnown components of this system (use these exact names when the code refers '
                        f'to them; mark components not in this list as "added"): {names}')
         components, flows, batches = {}, {}, 0
-        for listing in review_batches(root, files, listing_for=lambda f: (changed_region_listing(root, f, cap=None)
-                                                                                 if f.status == 'D' else read(root, f.path))):
-            data = llm.json('map', system, listing, default={})
+        inputs = list(review_batches(root, files, max_chars=input_budget(llm),
+                                     listing_for=lambda f: (changed_region_listing(root, f, cap=None)
+                                                            if f.status == 'D' else read(root, f.path))))
+        for index, listing in enumerate(inputs, 1):
+            with tracer.step('mapper', f'Map architecture: batch {index}/{len(inputs)}'):
+                data = llm.json('map', system, listing, default={})
             if not isinstance(data, dict) or not all(isinstance(data.get(k), list)
                                                      for k in ('components', 'flows')):
                 raise LLMError('map: invalid architecture response')

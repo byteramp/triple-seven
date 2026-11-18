@@ -80,7 +80,12 @@ class Tracer:
             stack = self._local.stack = []
         stack.append(node['seq'])
         t0 = time.time()
-        self._emit(node)
+        self._emit(node, force=True)
+        if ON_STEP:
+            try:
+                ON_STEP(dict(node))
+            except Exception:  # noqa: BLE001 — progress must never break a run
+                pass
         handle = _Handle(node)
         try:
             yield handle
@@ -94,7 +99,7 @@ class Tracer:
             node['finished_at'] = _now()
             node['duration_ms'] = int((time.time() - t0) * 1000)
             self._print(node)
-            self._emit(node, force=node['parent_seq'] is None)
+            self._emit(node, force=True)
             if ON_STEP:
                 try:
                     ON_STEP(node)

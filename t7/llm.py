@@ -21,6 +21,11 @@ class LLMError(RuntimeError):
     pass
 
 
+def input_budget(llm, default=36000):
+    """Bound Byteramp CPU inputs without reducing review coverage or changing other providers."""
+    return min(default, 8000) if getattr(getattr(llm, 'cfg', None), 'llm', None) == 'byteramp' else default
+
+
 def extract_json(text, default=None):
     if not text:
         return default

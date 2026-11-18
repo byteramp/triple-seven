@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from . import GROUND_RULES, Hypothesis
 from .checklists import checklist
 from .planner import SPECIALISTS
-from ..llm import LLMError
+from ..llm import LLMError, input_budget
 
 SPEC_FILES = {
     'iac': lambda p: p.endswith(('.tf', '.yaml', '.yml', 'Dockerfile', '.json')),
@@ -70,7 +70,7 @@ def changed_region_listing(root, f, context=25, cap=7000, include_removed=True):
 
 
 
-def review_batches(root, files, context=25, listing_for=None):
+def review_batches(root, files, context=25, listing_for=None, max_chars=36000):
     """Cover every changed region with overlapping bounded model inputs."""
     batch, size = [], 0
     for file in files:
@@ -79,7 +79,7 @@ def review_batches(root, files, context=25, listing_for=None):
         for start in range(0, len(listing), 5600):
             excerpt = listing[start:start + 6000]
             part = f'## {file.path} (status {file.status}, excerpt {start // 5600 + 1})\n{excerpt}'
-            if batch and size + len(part) > 36000:
+            if batch and size + len(part) > max_chars:
                 yield '\n\n'.join(batch)
                 batch, size = [], 0
             batch.append(part)
@@ -99,8 +99,10 @@ def _run_one(name, why, files, root, llm, tracer, fork):
             system = SYSTEM_TMPL.format(name=name.upper(), scope=SPECIALISTS[name],
                                         checklist=checklist(name))
             findings, batches = [], 0
-            for listing in review_batches(root, relevant):
-                data = llm.json('analyze', system, listing, default={})
+            inputs = list(review_batches(root, relevant, max_chars=input_budget(llm)))
+            for index, listing in enumerate(inputs, 1):
+                with tracer.step(f'analyst:{name}', f'{name}: batch {index}/{len(inputs)}'):
+                    data = llm.json('analyze', system, listing, default={})
                 if not isinstance(data, dict) or not isinstance(data.get('findings'), list):
                     raise LLMError(f'{name}: invalid findings response')
                 findings.extend(data['findings'])

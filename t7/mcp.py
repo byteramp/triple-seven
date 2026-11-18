@@ -219,12 +219,12 @@ def _ensure_repo_cwd():
 
 def on_step(node):
     """Tracer hook: forward finished steps as MCP progress so the developer sees what happens."""
-    if SESSION.progress_token is None or node.get('status') not in ('done', 'failed', 'skipped'):
+    if SESSION.progress_token is None or node.get('status') not in ('running', 'done', 'failed', 'skipped'):
         return
     SESSION.progress += 1
     _write({'jsonrpc': '2.0', 'method': 'notifications/progress', 'params': {
         'progressToken': SESSION.progress_token, 'progress': SESSION.progress,
-        'message': f"{node.get('agent')}: {node.get('title')}"[:200]}})
+        'message': f"{node.get('agent')}: {node.get('title')} ({node.get('status')})"[:200]}})
 
 
 def _log(*a):

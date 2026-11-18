@@ -7,6 +7,7 @@ deterministic one.
 """
 import json
 
+from ..llm import input_budget
 from . import GROUND_RULES
 
 SPECIALISTS = {
@@ -48,11 +49,16 @@ def plan(changed, areas, signals, profile, llm, tracer, use_llm=True):
 
         if use_llm and code_files:
             listing = []
-            for f in code_files[:40]:
+            budget = input_budget(llm, 24000)
+            selected_files = code_files[:40]
+            per_file = (budget - 500) // max(1, len(selected_files)) if budget < 24000 else 100000
+            for f in selected_files:
                 sample = '\n'.join(t for _, t in f.added[:25])
-                listing.append(f'## {f.path} (+{len(f.added)})\n{sample[:1500]}')
+                header = f'## {f.path} (+{len(f.added)})\n'
+                allowance = max(0, min(1500, per_file - len(header) - 2))
+                listing.append(header + sample[:allowance])
             data = llm.json('plan', SYSTEM, f"Already selected: {sorted(selected)}\n\n" +
-                            '\n\n'.join(listing)[:24000], default={}) or {}
+                            '\n\n'.join(listing)[:budget], default={}) or {}
             for item in data.get('add', [])[:3]:
                 sp = item.get('specialist')
                 if sp in SPECIALISTS and sp not in selected:
