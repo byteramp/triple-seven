@@ -67,3 +67,57 @@ def test_cli_model_failure_is_concise(monkeypatch, capsys):
         cli.main(['scan', '--all'])
     assert error.value.code == 2
     assert capsys.readouterr().err == 't7: model unavailable\n'
+
+
+@pytest.mark.parametrize('response', [
+    # Actual shape returned by the Copilot SDK when a sampling handler has no result.
+    {'model': '', 'stopReason': 'cancelled', 'role': 'user',
+     'content': {'type': 'text', 'text': 'The user cancelled the request.'}},
+    {'model': 'test', 'stopReason': 'refusal', 'role': 'assistant',
+     'content': {'type': 'text', 'text': 'Request refused.'}},
+    {'model': 'test', 'role': 'assistant', 'content': {'type': 'image'}},
+    {'model': 'test', 'role': 'assistant', 'content': {'type': 'text', 'text': ''}},
+    [],
+])
+def test_editor_failure_is_not_json_repaired_or_retried(monkeypatch, response):
+    from t7 import mcp
+    request = Mock(return_value=response)
+    monkeypatch.setattr(mcp, '_request', request)
+    monkeypatch.setattr('t7.llm.time.sleep', Mock(side_effect=AssertionError('must not retry')))
+    with pytest.raises(LLMError, match='No review completed') as error:
+        LLM(Config(llm='client'), None).json('plan', 'system', 'prompt')
+    assert 'invalid JSON' not in str(error.value)
+    assert 'model access' in str(error.value)
+    assert request.call_count == 1
+
+
+def test_editor_provider_error_is_actionable_and_does_not_leak_body(monkeypatch):
+    from t7 import mcp
+    request = Mock(side_effect=RuntimeError('model_not_supported; private_source_text'))
+    monkeypatch.setattr(mcp, '_request', request)
+    with pytest.raises(LLMError, match='model_not_supported') as error:
+        LLM(Config(llm='client'), None).json('plan', '', 'prompt')
+    assert 'private_source_text' not in str(error.value)
+    assert request.call_count == 1
+
+
+def test_editor_truncated_response_cannot_pass_as_complete_json(monkeypatch):
+    from t7 import mcp
+    monkeypatch.setattr(mcp, '_request', Mock(return_value={
+        'role': 'assistant', 'stopReason': 'maxTokens', 'model': 'test',
+        'content': {'type': 'text', 'text': '{}'},
+    }))
+    with pytest.raises(LLMError, match='output limit'):
+        LLM(Config(llm='client'), None).json('plan', '', 'prompt')
+
+
+def test_editor_joins_text_blocks_and_ignores_other_content(monkeypatch):
+    from t7 import mcp
+    monkeypatch.setattr(mcp, '_request', Mock(return_value={
+        'role': 'assistant', 'model': 'test', 'stopReason': 'endTurn',
+        'content': [{'type': 'text', 'text': '{"ok":'}, {'type': 'image'},
+                    {'type': 'text', 'text': 'true}'}],
+    }))
+    model = LLM(Config(llm='client'), None)
+    assert model.json('plan', '', 'prompt') == {'ok': True}
+    assert model.model == 'client:test'

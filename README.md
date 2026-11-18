@@ -101,6 +101,31 @@ policy, t7 uses Byteramp models (after opt-in) or what you set with `T7_LLM`.
 Ask in your assistant's chat (VS Code: Copilot Chat in **Agent** mode). The assistant
 only starts `t7_scan`; the review itself is t7's own pipeline with the model above.
 
+For a whole-repository review, paste this into Copilot Chat in **Agent** mode:
+
+```text
+Call Triple Seven's t7_scan MCP tool with all=true and fix=true for this workspace. Show the T7 result when it finishes.
+```
+
+This is equivalent to `t7 scan --all`: proposed fixes are prepared and verified; applying
+one is a separate action. For a first baseline without fix preparation, use `fix=false`
+(equivalent to `t7 scan --all --no-fix`). For later changes, use `all=false`.
+
+**Copilot Chat and the VS Code terminal are different routes.** The chat can provide
+editor model access when allowed by your organisation and the Copilot connection.
+Running `t7 scan` in the integrated terminal requires a separate, installed and signed-in
+Copilot CLI when the policy uses Copilot CLI. A Copilot extension alone does not install it.
+
+Select an available model in the chat and approve Triple Seven's model requests.
+For editor-managed connections, check **MCP: List Servers → triple-seven → Configure
+Model Access** as well. Copilot runtime connections use the runtime's model selection;
+editor-managed controls do not configure that path. A model available in chat is not
+guaranteed to work for MCP requests. If the editor reports `model_not_supported`, choose
+another available model and retry; T7 never switches providers automatically.
+
+A cancelled or rejected model request means **no completed review**, not a clean result.
+After `t7 update`, reload the editor or restart its Triple Seven MCP connection before retrying.
+
 Manual configuration (if you skipped it): `t7 editors --show`.
 
 ## Token lifetime

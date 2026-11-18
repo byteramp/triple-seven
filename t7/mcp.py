@@ -150,19 +150,54 @@ def _request(method, params):
                             'error': {'code': -32000, 'message': 'Triple Seven is busy with a scan'}})
 
 
+class SamplingError(RuntimeError):
+    """A rejected editor request must not be retried or treated as model output."""
+    retryable = False
+
+
+_MODEL_ACCESS_HELP = (
+    'No review completed. In Copilot Chat, choose an available model and approve '
+    'Triple Seven model access; sign in to your AI service if required. '
+    'If it still fails, check the editor model request log for the provider error '
+    '(for example model_not_supported). For editor-managed connections, also check '
+    'MCP: List Servers > triple-seven > Configure Model Access. '
+    'Chat model availability does not guarantee MCP model access. '
+    'T7 has not switched to another provider.'
+)
+
+
 def sample(system, prompt, max_tokens=2000, temperature=0.1):
     """MCP sampling: ask the editor (VS Code Copilot, …) to run the completion with the model
     the developer already uses."""
-    res = _request('sampling/createMessage', {
-        'messages': [{'role': 'user', 'content': {'type': 'text', 'text': prompt}}],
-        'systemPrompt': system or '', 'maxTokens': int(max_tokens), 'temperature': temperature,
-        'includeContext': 'none',
-        'modelPreferences': {'intelligencePriority': 0.8, 'speedPriority': 0.4, 'costPriority': 0.3},
-    })
+    try:
+        res = _request('sampling/createMessage', {
+            'messages': [{'role': 'user', 'content': {'type': 'text', 'text': prompt}}],
+            'systemPrompt': system or '', 'maxTokens': int(max_tokens), 'temperature': temperature,
+            'includeContext': 'none',
+            'modelPreferences': {'intelligencePriority': 0.8, 'speedPriority': 0.4, 'costPriority': 0.3},
+        })
+    except RuntimeError as error:
+        # Do not persist arbitrary provider error bodies: they can include source text.
+        code = ' (model_not_supported)' if 'model_not_supported' in str(error) else ''
+        raise SamplingError(f'Editor model request failed{code}. {_MODEL_ACCESS_HELP}') from None
+    if not isinstance(res, dict):
+        raise SamplingError(f'Editor returned an invalid model response. {_MODEL_ACCESS_HELP}')
+    reason = res.get('stopReason', '')
+    if reason in ('cancelled', 'canceled', 'refusal', 'error') or res.get('role') != 'assistant':
+        # Copilot can return a user-role cancellation after an upstream model failure.
+        # Its text is a status message, not a completion to feed to JSON repair.
+        raise SamplingError(f'Editor model request was cancelled, rejected or failed. {_MODEL_ACCESS_HELP}')
+    if reason == 'maxTokens':
+        raise SamplingError('Editor model response reached its output limit. No review completed. '
+                            'Choose a model with enough output capacity, then rerun T7.')
     content = res.get('content') or {}
-    if isinstance(content, list):
-        content = next((c for c in content if c.get('type') == 'text'), {})
-    return content.get('text', ''), res.get('model', '')
+    blocks = content if isinstance(content, list) else [content]
+    text = '\n'.join(block['text'] for block in blocks
+                     if isinstance(block, dict) and block.get('type') == 'text'
+                     and isinstance(block.get('text'), str))
+    if not text.strip():
+        raise SamplingError(f'Editor returned no model text. {_MODEL_ACCESS_HELP}')
+    return text, res.get('model', '')
 
 
 def _ensure_repo_cwd():

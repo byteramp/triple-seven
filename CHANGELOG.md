@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.3
+
+- Report rejected, cancelled and failed editor model requests with setup instructions instead of misleading JSON-repair errors.
+- Stop immediately when the editor cannot provide a completion; preserve provider policy without fallback.
+- Reject truncated model responses and combine multiple text blocks correctly.
+- Document exact Copilot Chat prompts, full-scan options and the separate terminal CLI requirement.
+
 ## 0.7.2
 
 - Stop incomplete security reviews from passing after specialist, triage or critic failures.

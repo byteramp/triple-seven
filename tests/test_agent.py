@@ -790,3 +790,29 @@ def test_scan_all_uses_empty_tree_even_with_main_branch(repo):
     paths = {f.path for f in gitops.changed_files(repo, base)}
     assert 'app/db.py' in paths
     assert 'app/users.py' in paths
+
+
+def test_mcp_cancelled_sampling_returns_failed_review(repo, monkeypatch):
+    """A real MCP conversation must stop after one cancelled model request."""
+    from t7 import mcp
+    monkeypatch.setenv('T7_LLM', 'client')
+    monkeypatch.setattr(llm_mod.LLM, '_dispatch', _ORIG_DISPATCH)
+    monkeypatch.setattr(mcp.SESSION, 'seq', 0)
+    messages = [
+        {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize',
+         'params': {'capabilities': {'sampling': {}}}},
+        {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call',
+         'params': {'name': 't7_scan', 'arguments': {'all': True, 'fix': True}}},
+        {'jsonrpc': '2.0', 'id': 't7-req-1', 'result': {
+            'model': '', 'stopReason': 'cancelled', 'role': 'user',
+            'content': {'type': 'text', 'text': 'The user cancelled the request.'}}},
+    ]
+    output = io.StringIO()
+    mcp.serve(io.StringIO('\n'.join(json.dumps(m) for m in messages) + '\n'), output)
+    replies = [json.loads(line) for line in output.getvalue().splitlines()]
+    result = next(reply['result'] for reply in replies if reply.get('id') == 2)
+    assert result['isError'] is True
+    assert 'No review completed' in result['content'][0]['text']
+    assert 'invalid JSON' not in result['content'][0]['text']
+    assert sum(reply.get('method') == 'sampling/createMessage' for reply in replies) == 1
+    assert not (repo / '.t7' / 'last_scan.json').exists()
