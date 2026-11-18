@@ -30,7 +30,14 @@ def apply(cfg, req, can_sample=False):
         # The developer's own AI: the editor's model (MCP sampling) when the review runs in an
         # editor that offers it, else a logged-in assistant CLI. `kind` may restrict which.
         allowed = [x.strip() for x in (req.get('kind') or '').split(',') if x.strip()]
-        if can_sample and (not allowed or 'sampling' in allowed):
+        wanted = os.environ.get('T7_ASSISTANT', '').strip().lower()
+        if wanted and (not allowed or wanted in allowed) and wanted != 'sampling':
+            from . import assistants
+            if wanted not in assistants.installed():
+                raise AccessError(need + f' Install {assistants.label(wanted)} and sign in before retrying.')
+            cfg.llm, cfg.assistant, cfg.llm_model = 'assistant', wanted, ''
+            cfg.parallel = min(cfg.parallel, 2)
+        elif can_sample and (not allowed or 'sampling' in allowed):
             cfg.llm, cfg.llm_model, cfg.parallel = 'client', '', 1
         else:
             from . import assistants

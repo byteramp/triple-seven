@@ -98,17 +98,53 @@ def merge(hypotheses):
 
 
 def _context(root, h, changed):
-    if h.file_path:
-        f = next((c for c in changed if c.path == h.file_path), None)
-        if f:
-            return f'## {f.path}\n' + changed_region_listing(root, f, context=60, cap=16000)
-        from ..gitops import read
-        return f'## {h.file_path}\n' + read(root, h.file_path, h.line_start or 1,
-                                            h.line_end or h.line_start or 1, pad=60)
-    # architecture-level threat: show the changed code of the component's files
-    parts = [f'## {c.path}\n' + changed_region_listing(root, c, context=15, cap=4000)
-             for c in changed if c.added][:8]
-    return '\n\n'.join(parts)[:24000]
+    if not h.file_path:
+        # An abstract architecture concern has no proven source location. Keep
+        # it for validation instead of guessing against the first eight files.
+        return ''
+    from ..gitops import read, contained_path
+    file = next((c for c in changed if c.path == h.file_path), None)
+    if file and file.status == 'D':
+        return f'## {file.path}\n' + changed_region_listing(root, file, cap=None)
+    start = max(1, h.line_start or 1)
+    end = max(start, h.line_end or start)
+    # Whole-repository diffs mark every line as added. Taking their first 16k
+    # characters omitted late findings and sent unrelated code to each verifier.
+    listing = read(root, h.file_path, start, end, pad=35)
+    removed = []
+    if file:
+        removed = [f'-- removed near line {part.start} | {line}'
+                   for part in file.hunks if abs(part.start - start) <= 70
+                   for line in part.removed_lines]
+    # Include imports and module-level controls without duplicating the sink.
+    try:
+        import ast
+        source = contained_path(root, h.file_path).read_text(errors='replace')
+        tree = ast.parse(source) if h.file_path.endswith('.py') else None
+        lines = source.splitlines()
+        prefix = []
+        if tree:
+            scopes = [node for node in ast.walk(tree)
+                         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                         and node.lineno <= start <= node.end_lineno]
+            if scopes:
+                # Keep class permissions, query scoping and enclosing closure guards.
+                function = min(scopes, key=lambda node: node.lineno)
+                first = min([function.lineno] + [d.lineno for d in function.decorator_list])
+                listing = read(root, h.file_path, first, function.end_lineno, pad=0)
+            for node in tree.body:
+                if isinstance(node, (ast.Import, ast.ImportFrom, ast.Assign, ast.AnnAssign)):
+                    if node.end_lineno < max(1, start - 35):
+                        value = '\n'.join(f'{n:>5} | {lines[n - 1]}'
+                                          for n in range(node.lineno, node.end_lineno + 1))
+                        prefix.append(value)
+        if prefix:
+            listing = '\n'.join(prefix) + '\n...\n' + listing
+    except (OSError, SyntaxError, ValueError, RecursionError):
+        pass
+    if removed:
+        listing += '\n' + '\n'.join(removed)
+    return f'## {h.file_path} (finding-centred context)\n' + listing
 
 
 def read_file(root, path):
@@ -121,12 +157,11 @@ def read_file(root, path):
 def region_hash(root, h):
     """Hash of the code a verdict was based on (file region around the finding). If it is
     unchanged, a previous rejection still holds. Only the hash leaves the machine."""
-    from ..gitops import read
     if not h.file_path:
         return ''
-    start = max(1, (h.line_start or 1) - 25)
-    text = read(root, h.file_path, start, (h.line_end or h.line_start or 1) + 25, pad=0)
+    text = _context(root, h, [])
     return hashlib.sha256(f'{h.file_path}\n{text}'.encode()).hexdigest() if text else ''
+
 
 
 def _triage_one(h, root, changed, llm, tracer, fork):

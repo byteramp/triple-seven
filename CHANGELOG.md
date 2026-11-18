@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.5
+
+- Use Copilot Auto through the official runtime for supported plan routing, from VS Code MCP and the terminal.
+- Isolate Copilot model calls, explicitly disable tools, and reject incomplete or tool-using responses.
+- Add `t7 copilot login` and register the preferred approved runtime without bypassing organisation policy.
+- Provide actual test conventions when generating regression tests; keep before/after execution as proof.
+- Keep late findings and their enclosing Python control flow in verification context.
+- Match DES and ECB as complete algorithm names instead of parts of ordinary words.
+- Clarify Copilot setup, Auto model selection and account usage limits.
+
+This release fixes Copilot routing and review reliability. Large first-time Byteramp scans on CPU still require performance work; no few-minute completion guarantee is claimed.
+
 ## 0.7.4
 
 - Bound Byteramp architecture and specialist inputs to smaller batches while preserving source coverage.

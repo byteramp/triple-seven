@@ -22,7 +22,7 @@ DETECTORS = [
     ('ssrf_sink', {'javascript', 'typescript'}, r'(fetch|axios\.\w+)\(\s*(req\.|url\b|`)', 'input'),
     ('secret_literal', None, r'(?i)(api[_-]?key|secret|passwd|password|token|private[_-]?key)\s*[:=]\s*["\'][A-Za-z0-9/+_\-]{12,}["\']', 'secrets'),
     ('secret_literal', None, r'(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|sk-[A-Za-z0-9]{32,}|xox[bp]-[A-Za-z0-9-]{20,}|-----BEGIN (RSA |EC )?PRIVATE KEY)', 'secrets'),
-    ('crypto_weak', None, r'(?i)\b(md5|sha1)\s*\(|DES\b|ECB|Math\.random\(\).*(token|secret|id)|random\.random\(\).*(token|secret)', 'crypto'),
+    ('crypto_weak', None, r'(?i)\b(md5|sha1)\s*\(|\bDES\b|\bECB\b|Math\.random\(\).*(token|secret|id)|random\.random\(\).*(token|secret)', 'crypto'),
     ('authz_change', {'python'}, r'(permission_classes|@login_required|@permission_required|IsAuthenticated|AllowAny|has_permission|has_object_permission|authentication_classes)', 'authz'),
     ('authz_change', {'javascript', 'typescript'}, r'(isAdmin|hasRole|authorize|requireAuth|@UseGuards|middleware.*auth)', 'authz'),
     ('auth_bypass_risk', {'python'}, r'AllowAny|csrf_exempt|authentication_classes\s*=\s*\[\s*\]', 'authz'),

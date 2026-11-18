@@ -13,6 +13,8 @@ PROVE_SYSTEM = GROUND_RULES + (
     "({framework}), that exercises the vulnerability through the real code path and asserts the "
     "SAFE behaviour. It must fail on the current (vulnerable) code and pass once the fix is "
     "applied. No network, no external services; use the framework's test client/fixtures. "
+    "Use the existing test conventions shown below, including conftest fixtures. Do not recreate a database "
+    "or table already set up by an autouse fixture. Create a NEW test file; never reuse an existing path. "
     "Return JSON: {{\"path\": new test file path, \"content\": full file content, "
     "\"asserts\": one sentence describing what the test proves}}."
 )
@@ -34,6 +36,23 @@ def _target(framework, path):
     return path
 
 
+def _test_context(root, framework):
+    """Supply real test conventions instead of making the model guess framework setup."""
+    pattern = _NAME_OK.get(framework)
+    paths = [path for path in gitops.git(root, 'ls-files').splitlines()
+             if pattern and pattern.search(path)]
+    listing = '\n'.join(paths[:30])
+    examples = []
+    for path in paths[:2]:
+        try:
+            source = gitops.contained_path(root, path).read_text(errors='replace')
+        except (OSError, ValueError):
+            continue
+        examples.append(f'## {path} (existing; do not overwrite)\n{source[:2500]}')
+    return ('EXISTING TEST PATHS (choose a different new path):\n' + listing +
+            '\nEXISTING TEST CONVENTIONS:\n' + '\n'.join(examples))
+
+
 def prove_one(h, root, profile, cfg, llm, tracer):
     if True:
         with tracer.step('prover', f'Prove: {h.title[:80]}') as s:
@@ -43,10 +62,11 @@ def prove_one(h, root, profile, cfg, llm, tracer):
             fw = profile.test_framework
             region = gitops.read(root, h.file_path, h.line_start or 1, h.line_end or h.line_start or 1,
                                  pad=60)
+            tests = _test_context(root, fw)
             d = llm.json('prove', PROVE_SYSTEM.format(framework=fw),
                          f'FINDING: {h.title} ({h.cwe}) at {h.file_path}:{h.line_start}\n'
                          f'Attack: {h.attack_scenario}\nTrace: {h.trace}\n\nCODE:\n{region}\n\n'
-                         f'FIX EDITS: {h.edits}', default={}, max_tokens=3000) or {}
+                         f'FIX EDITS: {h.edits}\n\n{tests}', default={}, max_tokens=3000) or {}
             path, content = str(d.get('path', '')), str(d.get('content', ''))
             if not path or not content or '..' in path.split('/') or path.startswith('/') \
                     or not _NAME_OK.get(fw, re.compile('.')).search(path) or (root / path).exists():

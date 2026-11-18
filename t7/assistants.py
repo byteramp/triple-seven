@@ -20,7 +20,7 @@ ASSISTANTS = {
     'claude': {'bin': 'claude', 'label': 'Claude Code', 'login': 'claude  (then /login)'},
     'codex': {'bin': 'codex', 'label': 'Codex', 'login': 'codex login'},
     'gemini': {'bin': 'gemini', 'label': 'Gemini CLI', 'login': 'gemini  (sign in with Google)'},
-    'copilot': {'bin': 'copilot', 'label': 'GitHub Copilot CLI', 'login': 'copilot  (then /login)'},
+    'copilot': {'bin': 'copilot', 'label': 'GitHub Copilot CLI', 'login': 't7 copilot login'},
 }
 
 
@@ -47,10 +47,10 @@ def label(key):
     return ASSISTANTS.get(key, {}).get('label', key)
 
 
-def _run(cmd, stdin_text, timeout, cwd):
+def _run(cmd, stdin_text, timeout, cwd, env=None):
     try:
         p = subprocess.run(cmd, input=stdin_text, capture_output=True, text=True, timeout=timeout,
-                           cwd=cwd, env={**os.environ, 'NO_COLOR': '1'})
+                           cwd=cwd, env={**(env if env is not None else os.environ), 'NO_COLOR': '1'})
     except subprocess.TimeoutExpired:
         raise AssistantError(f'{cmd[0]} did not answer within {timeout}s') from None
     except OSError as e:
@@ -61,11 +61,16 @@ def _run(cmd, stdin_text, timeout, cwd):
 def _fail(key, p):
     err = (p.stderr or p.stdout or '').strip()[-400:]
     if key == 'copilot' and p.returncode == 127:
-        error = AssistantError('GitHub Copilot CLI is unavailable. For Copilot in VS Code, '
-                               'run the Triple Seven MCP tool from Copilot Chat (Agent mode) '
-                               'with editor model access enabled and allowed by your model policy. '
-                               'For terminal scans, install and sign in to Copilot CLI, '
-                               'or choose Byteramp models in the portal.')
+        error = AssistantError('GitHub Copilot runtime is unavailable. Install it with '
+                               'npm install -g @github/copilot, then run t7 copilot login. '
+                               'Use it from Copilot Chat in VS Code or the terminal. Your Copilot plan and '
+                               'usage limits apply; no separate model API key is needed.')
+        error.retryable = False
+        raise error
+    if key == 'copilot':
+        error = AssistantError('Copilot runtime request failed. Update Copilot CLI, then run '
+                               't7 copilot login (or gh auth login with your Copilot account). '
+                               'T7 uses Auto routing within your existing plan; no API key is required.')
         error.retryable = False
         raise error
     hint = ''
@@ -119,11 +124,82 @@ def complete(key, system, prompt, timeout=600):
                 _fail(key, p)
             return p.stdout.strip(), 'gemini-cli'
         if key == 'copilot':
-            # No --allow-all-tools: any tool call fails instead of running.
-            p = _run(['copilot', '-p', full, '-s'], None, timeout, cwd)
-            if p.returncode != 0 and 'unknown option' in (p.stderr or '').lower():
-                p = _run(['copilot', '-p', full], None, timeout, cwd)
+            # Auto is the account's supported router. Passing its resolved model id
+            # directly can be rejected even when the same model works through Auto.
+            # Empty --available-tools exposes ALL tools in affected official CLI
+            # versions (github/copilot-cli#5306). A non-matching name selects none;
+            # explicit permission denials add protection if CLI filtering regresses.
+            env = _copilot_env(cwd)
+            try:
+                p = _run(['copilot', '--model', 'auto', '--available-tools=__t7_model_only__',
+                          '--deny-tool=shell', '--deny-tool=read', '--deny-tool=write',
+                          '--deny-tool=url', '--deny-tool=memory',
+                          '--disable-builtin-mcps', '--no-custom-instructions', '--no-ask-user',
+                          '--trust-folder', '--sync-session=off', '--output-format', 'json',
+                          '-p', full], None, timeout, cwd, env=env)
+            except AssistantError as error:
+                error.retryable = False
+                raise
             if p.returncode != 0:
                 _fail(key, p)
-            return p.stdout.strip(), 'copilot-cli'
+            return _copilot_result(p.stdout)
     raise AssistantError(f'Unknown assistant {key}')
+
+
+def _copilot_env(cwd):
+    """Isolated T7 profile; use explicit auth or the officially supported gh OAuth login."""
+    from .credentials import path
+    env = {k: v for k, v in os.environ.items() if not k.startswith(('COPILOT_PROVIDER_', 'T7_'))}
+    # The runtime must not load a developer's plugins, MCP servers or repository hooks.
+    profile = path().parent / 'copilot'
+    profile.mkdir(parents=True, exist_ok=True)
+    os.chmod(profile, 0o700)
+    env['COPILOT_HOME'] = str(profile)
+    if not any(env.get(k) for k in ('COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN')):
+        gh = shutil.which('gh')
+        if gh:
+            try:
+                token = subprocess.run([gh, 'auth', 'token'], capture_output=True, text=True, timeout=10)
+                if token.returncode == 0 and token.stdout.strip():
+                    env['COPILOT_GITHUB_TOKEN'] = token.stdout.strip()
+            except (OSError, subprocess.SubprocessError):
+                pass
+    return env
+
+
+def _copilot_result(text):
+    answer, model, completed = '', '', False
+    for line in text.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        kind, data = event.get('type'), event.get('data') or {}
+        if not isinstance(data, dict):
+            continue
+        if kind == 'tool.execution_start':
+            error = AssistantError('Copilot attempted a tool call in a model-only review request.')
+            error.retryable = False
+            raise error
+        if kind == 'assistant.message' and not data.get('parentToolCallId'):
+            answer, model = str(data.get('content') or ''), str(data.get('model') or '')
+        if kind == 'result':
+            completed = event.get('exitCode') == 0
+    if not completed or not answer.strip():
+        error = AssistantError('Copilot did not return a completed model response. Run t7 copilot login '
+                               'or update the official Copilot CLI, then retry.')
+        error.retryable = False
+        raise error
+    return answer, 'auto/' + (model or 'copilot')
+
+
+def copilot_login():
+    """Use the official OAuth flow in the isolated T7 runtime profile."""
+    import pathlib
+    env = _copilot_env(str(pathlib.Path.cwd()))
+    # Login should establish its own credential rather than inherit a token override.
+    for key in ('COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN'):
+        env.pop(key, None)
+    return subprocess.call(['copilot', 'login'], env=env)

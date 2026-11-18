@@ -94,8 +94,12 @@ def detect():
     found = []
     for label, user_dir in _vscode_user_dirs():
         if user_dir.exists():
-            entry = {'type': 'stdio', 'command': cmd, 'args': ['mcp']}
+            entry = {'type': 'stdio', 'command': cmd, 'args': ['mcp', '--assistant', 'copilot']}
             found.append((label, lambda l=label, d=user_dir, e=entry: _json_target(l, d / 'mcp.json', 'servers', e)))
+    if shutil.which('copilot'):
+        entry = {'type': 'stdio', 'command': cmd, 'args': ['mcp', '--assistant', 'copilot']}
+        found.append(('Copilot', lambda e=entry: _json_target('Copilot', _home() / '.copilot' / 'mcp-config.json',
+                                                           'mcpServers', e)))
     if (_home() / '.cursor').exists():
         entry = {'command': cmd, 'args': ['mcp']}
         found.append(('Cursor', lambda e=entry: _json_target('Cursor', _home() / '.cursor' / 'mcp.json',
@@ -195,7 +199,9 @@ def manual_snippets():
     j = {'command': cmd, 'args': ['mcp']}
     return [
         ('VS Code — user mcp.json (Command Palette → "MCP: Open User Configuration")',
-         json.dumps({'servers': {NAME: {'type': 'stdio', **j}}}, indent=2)),
+         json.dumps({'servers': {NAME: {'type': 'stdio', **j, 'args': ['mcp', '--assistant', 'copilot']}}}, indent=2)),
+        ('Copilot — ~/.copilot/mcp-config.json',
+         json.dumps({'mcpServers': {NAME: {**j, 'args': ['mcp', '--assistant', 'copilot']}}}, indent=2)),
         ('Cursor — ~/.cursor/mcp.json', json.dumps({'mcpServers': {NAME: j}}, indent=2)),
         ('Windsurf — ~/.codeium/windsurf/mcp_config.json', json.dumps({'mcpServers': {NAME: j}}, indent=2)),
         ('Claude Code — terminal', f'claude mcp add --scope user {NAME} -- {cmd} mcp'),

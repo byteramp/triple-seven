@@ -140,6 +140,22 @@ def _shadow_warning(root=None):
             '  T7_TOKEN is only for CI pipelines.')
 
 
+def cmd_copilot(a):
+    from . import assistants
+    if 'copilot' not in assistants.installed():
+        raise AccessError('Install the official runtime: npm install -g @github/copilot. '
+                          'Then run t7 copilot login. This uses your existing Copilot plan.')
+    return assistants.copilot_login()
+
+
+def cmd_mcp(a):
+    if a.assistant:
+        os.environ['T7_ASSISTANT'] = a.assistant
+    from .mcp import serve
+    serve()
+    return 0
+
+
 def cmd_doctor(a):
     root = _root_or_none()
     cfg = Config.load(root)
@@ -563,8 +579,12 @@ def main(argv=None):
     sub.add_parser('doctor', help='check setup').set_defaults(fn=cmd_doctor)
     sub.add_parser('command', help='apply /t7 decisions from a PR comment (GitHub Actions)').set_defaults(
         fn=lambda a: __import__('t7.commands', fromlist=['run_command']).run_command())
-    sub.add_parser('mcp', help='run as an MCP server (stdio) for IDE assistants').set_defaults(
-        fn=lambda a: __import__('t7.mcp', fromlist=['serve']).serve() or 0)
+    m = sub.add_parser('mcp', help='run as an MCP server (stdio) for IDE assistants')
+    m.add_argument('--assistant', choices=['copilot', 'claude', 'codex', 'gemini'], help='preferred approved assistant runtime')
+    m.set_defaults(fn=cmd_mcp)
+    cp = sub.add_parser('copilot', help='sign in to the isolated T7 Copilot runtime')
+    cp.add_argument('action', choices=['login'])
+    cp.set_defaults(fn=cmd_copilot)
     a = p.parse_args(argv)
     if not getattr(a, 'fn', None):
         print(WELCOME)

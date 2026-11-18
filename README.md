@@ -92,7 +92,7 @@ passes `repo_path`).
 **Which model analyses the code** is decided by your organisation's *model policy*
 (portal → Repositories): Byteramp EU models, your organisation's own model (endpoint in
 the policy, API key in your environment as `T7_LLM_API_KEY`), a local Ollama model, or
-the editor's own model via MCP sampling (e.g. VS Code + Copilot — only if the policy
+the editor's model via MCP sampling in compatible clients (only if the policy
 allows it) — or the developer's own signed-in AI CLI (Claude Code, Codex, Gemini CLI,
 Copilot CLI) under their subscription, **no API key**. t7 applies the policy before any model call; it overrides `T7_LLM` and
 never falls back to another model. Every result states what analysed it. Without a
@@ -111,22 +111,28 @@ This is equivalent to `t7 scan --all`: proposed fixes are prepared and verified;
 one is a separate action. For a first baseline without fix preparation, use `fix=false`
 (equivalent to `t7 scan --all --no-fix`). For later changes, use `all=false`.
 
-**Copilot Chat and the VS Code terminal are different routes.** The chat can provide
-editor model access when allowed by your organisation and the Copilot connection.
-Running `t7 scan` in the integrated terminal requires a separate, installed and signed-in
-Copilot CLI when the policy uses Copilot CLI. A Copilot extension alone does not install it.
+**Copilot in VS Code and the terminal use the official Copilot runtime for T7.**
+Install it once and sign in with your existing Copilot account:
 
-Select an available model in the chat and approve Triple Seven's model requests.
-For editor-managed connections, check **MCP: List Servers → triple-seven → Configure
-Model Access** as well. Copilot runtime connections use the runtime's model selection;
-editor-managed controls do not configure that path. A model available in chat is not
-guaranteed to work for MCP requests. If the editor reports `model_not_supported`, choose
-another available model and retry; T7 never switches providers automatically.
+```sh
+npm install -g @github/copilot
+t7 copilot login
+t7 editors
+```
 
-A cancelled or rejected model request means **no completed review**, not a clean result.
-After `t7 update`, reload the editor or restart its Triple Seven MCP connection before retrying.
+Reload VS Code, then use the chat prompt above. For a terminal review, run
+`T7_ASSISTANT=copilot t7 scan --all --no-fix`. An existing supported `gh auth login`
+can also supply the Copilot account login. No separate model API key is needed.
+Your Copilot plan's model access and usage limits still apply.
 
-Manual configuration (if you skipped it): `t7 editors --show`.
+T7 uses **Auto routing**, rather than forcing the resolved ID of the model selected
+in chat. Some models work through Auto but reject direct MCP sampling requests.
+The result records the actual model used. The organisation must allow **Copilot**;
+an editor-sampling-only policy does not permit this route. T7 never changes providers
+to work around a policy or access error.
+
+Each model call runs in an isolated T7 profile, with tools disabled. The outer
+assistant starts T7; it does not replace the scan with its own review.
 
 ## Scan duration and progress
 

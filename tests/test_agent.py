@@ -509,7 +509,7 @@ def test_editor_registration_merges_and_is_idempotent(tmp_path, monkeypatch):
     assert json.loads((tmp_path / '.kiro' / 'settings' / 'mcp.json').read_text())['mcpServers']['triple-seven']
     vs = json.loads((tmp_path / 'Code' / 'User' / 'mcp.json').read_text())
     assert vs['servers']['other'] == {'command': 'x'}                       # kept
-    assert vs['servers']['triple-seven'] == {'type': 'stdio', 'command': '/usr/local/bin/t7', 'args': ['mcp']}
+    assert vs['servers']['triple-seven'] == {'type': 'stdio', 'command': '/usr/local/bin/t7', 'args': ['mcp', '--assistant', 'copilot']}
     assert 'T7_TOKEN' not in (tmp_path / '.cursor' / 'mcp.json').read_text()
     second = {label: state for label, state, _ in editors.register()}
     assert set(second.values()) == {'ok'}
