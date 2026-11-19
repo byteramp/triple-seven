@@ -31,7 +31,7 @@ def _py():
                                                      else shlex.quote(sys.executable))
 
 
-def detect(root: Path, cfg) -> Profile:
+def detect(root: Path, cfg, inventory=None) -> Profile:
     p = Profile()
     py = _py()
     # ── Python ────────────────────────────────────────────────────────────
@@ -89,9 +89,16 @@ def detect(root: Path, cfg) -> Profile:
         p.test_framework, p.test_cmd = 'go', 'go test ./...'
         p.lint_cmd, p.type_cmd = 'go vet ./...', 'go build ./...'
     # ── IaC ───────────────────────────────────────────────────────────────
-    if list(root.glob('**/*.tf'))[:1]:
+    if inventory is None:
+        terraform = next(root.rglob('*.tf'), None) is not None
+        kubernetes = next(root.rglob('Chart.yaml'), None) is not None or next(root.glob('k8s/**/*.y*ml'), None) is not None
+    else:
+        terraform = any(path.endswith('.tf') for path in inventory)
+        kubernetes = any(path.rsplit('/', 1)[-1] == 'Chart.yaml' or
+                         (path.startswith('k8s/') and path.endswith(('.yaml', '.yml'))) for path in inventory)
+    if terraform:
         p.stack.append('terraform')
-    if list(root.glob('**/Chart.yaml'))[:1] or list(root.glob('k8s/**/*.y*ml'))[:1]:
+    if kubernetes:
         p.stack.append('kubernetes')
     if (root / 'Dockerfile').exists():
         p.stack.append('docker')

@@ -149,7 +149,7 @@ def detect():
         ag = gem / 'config' / 'mcp_config.json'
         if not ag.exists() and (gem / 'antigravity' / 'mcp_config.json').exists():
             ag = gem / 'antigravity' / 'mcp_config.json'          # older Antigravity versions
-        found.append(('Antigravity', lambda p=ag: _json_target('Antigravity', p, 'mcpServers', std)))
+        found.append(('Antigravity', lambda p=ag: _json_target('Antigravity', p, 'mcpServers', {**std, 'timeoutSeconds': 900})))
     kiro = _home() / '.kiro'
     if kiro.exists():
         found.append(('Kiro', lambda: _json_target('Kiro', kiro / 'settings' / 'mcp.json', 'mcpServers', std)))

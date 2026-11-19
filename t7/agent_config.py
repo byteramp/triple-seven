@@ -89,7 +89,7 @@ def scan_repo(root):
     signals = []
     for rel in FILES:
         p = root / rel
-        if not p.is_file():
+        if not p.is_file() or p.is_symlink() or not p.resolve().is_relative_to(root.resolve()):
             continue
         try:
             text = p.read_text(errors='replace')[:200000]

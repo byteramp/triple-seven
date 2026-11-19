@@ -25,6 +25,7 @@ import traceback
 
 from . import __version__, gitops
 from .access import AccessError
+from .repository import MapError
 
 PROTOCOL_VERSION = '2025-06-18'
 SUPPORTED_VERSIONS = {'2024-11-05', '2025-03-26', '2025-06-18'}
@@ -48,6 +49,12 @@ TOOLS = [
             },
         },
         'annotations': {'readOnlyHint': True, 'openWorldHint': True},
+    },
+    {
+        'name': 't7_setup_repo', 'title': 'Initialize the shared T7 repository',
+        'description': 'Repository owners only. Initialize the clean default branch and create the shared marker.',
+        'inputSchema': {'type': 'object', 'properties': {'repo_path': {'type': 'string'}, 'rebuild': {'type': 'boolean'}}},
+        'annotations': {'readOnlyHint': False, 'openWorldHint': True},
     },
     {
         'name': 't7_findings',
@@ -294,8 +301,8 @@ def tool_scan(args):
                         fix=args.get('fix', True), quiet=True, client='mcp',
                         can_sample=client_can_sample())
     if res.get('no_changes'):
-        return _text('Nothing changed compared with the base branch. Call t7_scan with all=true to '
-                     'review the whole repository.' + ('' if res.get('run_id') else LOCAL_ONLY))
+        return _text((res.get('scope_message') or 'No reviewable changes against the base.') +
+                     f" Gate: {res['gate']['verdict'].upper()}. Run: {res.get('run_id') or 'local'}")
     root = _root()
     head = f"Analysed with: {res.get('analysed_with')}\n"
     if res.get('update_notice'):
@@ -308,11 +315,22 @@ def tool_scan(args):
                  f"{coverage['reviewed_files']} files had targeted AI checks; "
                  f"{coverage.get('unverified_paths', 0)} risk paths still need validation.\n")
     elif coverage:
-        head += (f"Coverage: {coverage['reviewed_files']}/{coverage['changed_files']} changed files "
+        head += (f"Coverage: {coverage['reviewed_files']}/{coverage.get('scope_files', coverage['changed_files'])} files in scope "
                  f"reviewed; {len(coverage['excluded_files'])} excluded.\n")
         if coverage['excluded_files']:
             head += "Excluded: " + ', '.join(coverage['excluded_files']) + "\n"
     return _text(head + _fmt_findings(_last(root)) + note)
+
+
+def tool_setup_repo(args):
+    from . import trace
+    from .orchestrator import scan_repo
+    _ensure_repo_cwd()
+    trace.ON_STEP = on_step
+    with contextlib.redirect_stdout(io.StringIO()):
+        result = scan_repo(setup_repo=True, rebuild=args.get('rebuild') is True, fix=False, quiet=True, client='mcp', can_sample=client_can_sample())
+    return _text(f"Repository initialized. Baseline gate {result['gate']['verdict'].upper()}. "
+                 "Commit .t7/repository.json using git add -f -- .t7/repository.json and the team's PR workflow.")
 
 
 def tool_findings(args):
@@ -380,7 +398,7 @@ def tool_doctor(args):
     return _text(buf.getvalue())
 
 
-HANDLERS = {'t7_scan': tool_scan, 't7_findings': tool_findings, 't7_explain': tool_explain,
+HANDLERS = {'t7_scan': tool_scan, 't7_setup_repo': tool_setup_repo, 't7_findings': tool_findings, 't7_explain': tool_explain,
             't7_show_fix': tool_show_fix, 't7_apply_fix': tool_apply_fix, 't7_doctor': tool_doctor}
 
 
@@ -425,6 +443,8 @@ def handle(msg):
             out = fn(params.get('arguments') or {})
             result, is_error = (out if isinstance(out, tuple) else (out, False))
             return ok({**result, 'isError': bool(is_error)})
+        except MapError as e:
+            return ok({**_text(str(e)), 'isError': True})
         except AccessError as e:
             where = os.getcwd()
             return ok({**_text(f'Triple Seven: no access for {where}.\n{e}\n\n'

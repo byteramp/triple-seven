@@ -84,6 +84,21 @@ canonical remote.
 
 ## First baseline and later changes
 
+A repository owner signs in with `t7 setup --browser`, fetches origin and runs
+`t7 setup-repo` from the clean default branch at the fetched tip. Commit
+`.t7/repository.json` (`git add -f -- .t7/repository.json`) through your normal workflow.
+For editor-only model access the owner can invoke `t7_setup_repo` in a supported editor.
+T7 shares reviewed commit maps through the authenticated repository API. Local work
+uses a worktree-specific cache. Dependency impact follows static Python imports and
+relative JS/TS imports. Other languages receive a file inventory. Configure CI on default
+branch pushes to share subsequent reviewed commits across developer accounts.
+
+Developers activate once using the emailed code, open their clone and run
+`t7 scan --no-fix`. The daily scan compares with a reviewed ancestor and includes
+uncommitted and untracked files plus affected importers. `t7 scan` also prepares
+fix proposals. A missing applicable ancestor requires fetching history or integrating
+the initialized branch. Full scans remain explicit.
+
 `t7 scan --all --no-fix` checks repository source files locally and applies AI verification to risk paths identified by the supported rules. It does not send every source line to AI. Python checks recognize request/tool arguments and model/network outputs within functions; pattern checks cover other supported languages and configuration. Custom cross-function flows and unmatched semantic risks are outside the baseline's complete coverage.
 
 Confirmed findings still face an independent critic. Unverified paths remain visible and make the baseline warn. Local source inventory nodes do not assert runtime network flows or trust boundaries.
@@ -109,15 +124,14 @@ policy, t7 uses Byteramp models (after opt-in) or what you set with `T7_LLM`.
 Ask in your assistant's chat (VS Code: Copilot Chat in **Agent** mode). The assistant
 only starts `t7_scan`; the review itself is t7's own pipeline with the model above.
 
-For a whole-repository review, paste this into Copilot Chat in **Agent** mode:
+For daily reviews, open the repository in your local editor and paste:
 
 ```text
-Call Triple Seven's t7_scan MCP tool with all=true and fix=true for this workspace. Show the T7 result when it finishes.
+Call Triple Seven's t7_scan MCP tool with all=false and fix=false for this workspace. Show the T7 result when it finishes.
 ```
 
-This is equivalent to `t7 scan --all`: proposed fixes are prepared and verified; applying
-one is a separate action. For a first baseline without fix preparation, use `fix=false`
-(equivalent to `t7 scan --all --no-fix`). For later changes, use `all=false`.
+This is equivalent to `t7 scan --no-fix`. Supply the absolute checkout path as `repo_path`
+in desktop clients. Use `fix=true` to prepare proposed fixes separately.
 
 **Copilot in VS Code and the terminal use the official Copilot runtime for T7.**
 Install it once and sign in with your existing Copilot account:
@@ -129,7 +143,7 @@ t7 editors
 ```
 
 Reload VS Code, then use the chat prompt above. For a terminal review, run
-`T7_ASSISTANT=copilot t7 scan --all --no-fix`. An existing supported `gh auth login`
+`T7_ASSISTANT=copilot t7 scan --no-fix`. An existing supported `gh auth login`
 can also supply the Copilot account login. No separate model API key is needed.
 Your Copilot plan's model access and usage limits still apply.
 

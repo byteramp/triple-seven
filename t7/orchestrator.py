@@ -75,7 +75,7 @@ def analysed_with(cfg):
         ' (organisation policy)' if cfg.policy_label else '')
 
 
-def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=None, can_sample=False):
+def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=None, can_sample=False, setup_repo=False, rebuild=False):
     started = time.time()
     root = gitops.repo_root()
     cfg = Config.load(root)
@@ -96,8 +96,13 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
 
     base_sha = gitops.resolve_base(root, base or (gh or {}).get('base_sha') or push_base or None)
     head = gitops.head_sha(root)
-    changed = gitops.changed_files(root, base_sha, include_worktree=not ci, ignore=cfg.ignore_paths)
-    profile = detect(root, cfg)
+    changed = []
+    map_review = None
+    ref = (os.environ.get('GITHUB_HEAD_REF') if ci else '') or (push or {}).get('branch') or gitops.current_branch(root)
+    from .repository import MapReview, MapError, marker_path
+    if cfg.offline and (setup_repo or marker_path(root).exists()):
+        raise MapError('A shared repository map requires a connected T7 account. Run t7 setup.')
+    profile = None
 
     policy, run_id, update_notice = {}, None, ''
     if cfg.offline and not offline_allowed():
@@ -114,11 +119,32 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
         update_notice = updates.notice(pre.get('agent'))
         if update_notice and not quiet:
             print(f't7: {update_notice}', file=sys.stderr)
+        binding = marker_path(root).exists()
+        if updates.parse((pre.get('agent') or {}).get('minimum')) > updates.parse(__version__):
+            raise AccessError('Update required: run t7 update and restart your editor before scanning.')
+        if (binding or setup_repo) and pre.get('map_format') != 1:
+            raise MapError('The server does not support this repository map yet. Check t7 status and contact the owner.')
         model_policy.apply(cfg, (pre.get('llm') or {}).get('required'), can_sample=can_sample)
         llm.model = cfg.llm_model or ('byteramp-vps' if cfg.llm == 'byteramp' else '')
+        if setup_repo or ((binding or pre.get('map_initialized')) and base != gitops.EMPTY_TREE):
+            requested = base or (gh or {}).get('base_sha') or push_base
+            if requested:
+                requested = gitops.git(root, 'rev-parse', '--verify', '--end-of-options',
+                                       requested + '^{commit}', check=False).strip()
+                if not requested:
+                    raise MapError('Requested base commit is missing. Fetch the branch history and retry.')
+                requested = gitops.git(root, 'merge-base', requested, 'HEAD', check=False).strip()
+                if not requested:
+                    raise MapError('The checkout and requested base have no common history.')
+            map_review = MapReview(root, cfg, api, pre, setup=setup_repo, ci=ci, fix=fix,
+                                   requested=requested, ref=ref, rebuild=rebuild)
+            if map_review.done:
+                return map_review.done
+            base_sha = map_review.base
+        profile = detect(root, cfg, map_review.graph) if map_review else detect(root, cfg)
         try:
             r = api.start_run(trigger='pull_request' if gh else ('push' if push or ci else 'local'),
-                              ref=os.environ.get('GITHUB_HEAD_REF') or gitops.current_branch(root),
+                              ref=ref,
                               base_sha=base_sha, head_sha=head,
                               pr_number=gh and gh['number'], pr_title=gh and gh['title'],
                               pr_url=gh and gh['url'], author=gh and gh['author'],
@@ -132,7 +158,7 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                 fresh = Config.load(root)
                 if fresh.token and fresh.token != cfg.token:
                     cfg.token = fresh.token
-                    return scan_repo(base=base, fix=fix, ci=ci, quiet=quiet, enrich=enrich, client=client)
+                    return scan_repo(base=base, fix=fix, ci=ci, quiet=quiet, enrich=enrich, client=client, can_sample=can_sample, setup_repo=setup_repo, rebuild=rebuild)
             if e.status in (409, 426):     # policy mismatch / agent too old: server explains
                 raise AccessError(str(e.detail)) from None
             if e.status == 403 and 'Byteramp models' in str(e.detail):
@@ -143,6 +169,8 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
             if e.status in (401, 402, 403):
                 raise AccessError(REJECTED.format(detail=e.detail or e.status)) from None
             raise AccessError(UNREACHABLE.format(url=cfg.api_url, detail=e.detail or e.status)) from None
+    if profile is None:
+        profile = detect(root, cfg)
     if cfg.llm == 'byteramp' and cfg.offline:
         raise AccessError('Byteramp models need a connected repository. Run `t7 setup`, or for '
                           'local development set T7_LLM=ollama|openai|azure|anthropic.')
@@ -154,11 +182,16 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
     sec_ids, result = {}, {'gate': {'verdict': 'pass'}, 'summary_markdown': '',
                            'update_notice': update_notice, 'analysed_with': analysed_with(cfg)}
     memory = {'rejected': [], 'reused': []}
-    rejections = frozenset(policy.get('rejections', []))
+    rejections = frozenset() if map_review and map_review.impacted else frozenset(policy.get('rejections', []))
     owners = CodeOwners.load(root)
     baseline_mode = base_sha == gitops.EMPTY_TREE
     local_methods, local_hypotheses, hyps = {}, [], []
     try:
+        changed = gitops.changed_files(root, base_sha, include_worktree=not ci, ignore=cfg.ignore_paths)
+        skipped = [f for f in changed if f.skip_reason]
+        changed = [f for f in changed if not f.skip_reason]
+        if map_review:
+            map_review.expand(changed)
         with tracer.step('orchestrator', f'Review {len(changed)} changed file(s)',
                          base=base_sha[:12], head=head[:12]) as root_step:
             if not changed:
@@ -200,7 +233,7 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                         step.summary(f"{len(delta['components'])} source modules; runtime network flows not inferred")
                 else:
                     delta = map_architecture(root, changed, signals, chain, llm, tracer,
-                                             lambda root, path: gitops.numbered(root, path, max_lines=None), known=policy.get('architecture'))
+                                             lambda root, path: gitops.numbered(root, path, max_lines=None), known=None if map_review else policy.get('architecture'))
                 hyps = []
                 if run_id:
                     with tracer.step('threat-model', 'Delta threat model (Airframe engine)') as s:
@@ -295,6 +328,16 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                             limits='Local rule coverage with within-function Python source-flow checks. Custom cross-function flows and unmatched semantic risks are not fully analysed by the baseline; contextual change reviews remain separate.')
             coverage['excluded_files'] = [file.path for file in changed if file.skip_reason]
             coverage['exclusion_reasons'] = {file.path: file.skip_reason for file in changed if file.skip_reason}
+        coverage['changed_files'] += len(skipped)
+        coverage['excluded_files'].extend(file.path for file in skipped)
+        coverage['exclusion_reasons'].update({file.path: file.skip_reason for file in skipped})
+        if map_review:
+            if map_review.anchor and not map_review.paths:
+                coverage['inherited_review'] = map_review.anchor['run']
+            coverage.update(scope_files=len(changed) + len(skipped), map_files=len(map_review.graph), map_base=map_review.base,
+                            impacted_files=sorted(map_review.impacted), changed_files=len(map_review.paths))
+        if skipped and not changed:
+            result.pop('no_changes', None)
         result['coverage'] = coverage
         if cfg.offline:
             blocking = [h for h in result.get('_confirmed', []) if h.severity in ('critical', 'high')]
@@ -304,12 +347,14 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
             print(f"Coverage: {coverage['locally_checked_files']} files checked locally; {len(reviewed)} files had targeted AI verification; "
                   f"{coverage.get('unverified_paths', 0)} risk paths still need validation.", file=sys.stderr)
         elif not quiet:
-            print(f"Coverage: {len(reviewed)}/{len(changed)} changed files reviewed by specialists; "
+            print(f"Coverage: {len(reviewed)}/{coverage.get('scope_files', len(changed))} files in scope reviewed by specialists; "
                   f"{len(coverage['excluded_files'])} excluded; {batches} analysis batches.", file=sys.stderr)
         tracer.flush()
         if run_id:
+            manifest = map_review.manifest(run_id) if map_review else None
             result = {**result, **api.finish(
-                run_id, resolved_fingerprints=result.get('resolved', []),
+                run_id, **({'repository_map': manifest} if manifest is not None else {}),
+                resolved_fingerprints=result.get('resolved', []),
                 llm_model=llm.model or '',
                 committed_patches=_committed_fixes(root),
                 rejected=memory['rejected'], reused_rejections=memory['reused'],
@@ -319,6 +364,8 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                        'models_by_purpose': {key: sorted(values) for key, values in llm.models_by_purpose.items()},
                        'seconds': round(time.time() - started, 1),
                        'steps': len(tracer.steps)})}
+            if result.get('status') == 'error':
+                raise LLMError('The server marked this review incomplete.')
             if gh and result.get('summary_markdown'):
                 try:
                     poster = post_pr if gh['kind'] == 'github' else post_mr
@@ -350,6 +397,8 @@ def scan_repo(base=None, fix=True, ci=False, quiet=False, enrich=True, client=No
                     result['seconds'], result.get('resolved', []), result.get('unconfirmed', 0))
     result['run_id'] = run_id
     result['api_url'] = cfg.api_url
+    if map_review:
+        map_review.complete(result)
     return result
 
 

@@ -44,7 +44,7 @@ class Byteramp:
     def _req(self, method, path, body=None, timeout=60):
         if self.cfg.offline:
             raise APIError(0, 'offline (no T7_TOKEN)')
-        if body is not None and path != 'llm/':
+        if body is not None and path != 'llm/' and not path.endswith('/map-chunks/'):
             body = metadata.clean(body)
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(

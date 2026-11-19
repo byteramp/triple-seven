@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.0
+
+- Initialize a shared repository map once with `t7 setup-repo` or the owner MCP tool.
+- Review changes against a completed Git ancestor and follow Python and relative JavaScript/TypeScript import dependencies.
+- Cache unchanged passing working-copy reviews locally. Publish clean commit maps after review completion.
+- Report rename halves, deletions, empty files and unsupported binary, symlink or oversized inputs.
+- Use the developer email guide for daily terminal and desktop reviews.
+
 ## 0.7.5
 
 - Use Copilot Auto through the official runtime for supported plan routing, from VS Code MCP and the terminal.

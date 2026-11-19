@@ -1,5 +1,6 @@
 """Git + workspace helpers. Every verification runs in a throw-away worktree so
 the developer's checkout is never touched."""
+import codecs
 import hashlib
 import os
 import re
@@ -9,6 +10,8 @@ import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
+
+from .repo_graph import MAX_BYTES, read_file
 
 
 def run(cmd, cwd, timeout=600, env=None, check=False):
@@ -84,74 +87,179 @@ def current_branch(root):
     return p.stdout.strip() if p.returncode == 0 else 'HEAD'
 
 
-def changed_files(root, base, include_worktree=True, ignore=()):
-    """Parse a unified diff (base..HEAD, plus uncommitted work for local runs)."""
-    args = ['diff', '--unified=0', '--no-color', '--find-renames', base]
-    if not include_worktree and has_commits(root):
-        args.append('HEAD')
-    out = git(root, *args)
-    files, cur, hunk, old_path = [], None, None, ''
-    for line in out.splitlines():
-        if line.startswith('diff --git'):
-            cur, hunk, old_path = None, None, ''
-        elif line.startswith('--- '):
-            old_path = line[4:].strip().removeprefix('a/')
-        elif line.startswith('+++ '):
-            path = line[4:].strip()
-            if path == '/dev/null':
-                path = old_path
-            path = path[2:] if path.startswith('b/') else path
-            if any(path.startswith(i) or f'/{i}' in path for i in ignore):
-                cur = None
-                continue
-            cur = ChangedFile(path=path, status='M')
-            files.append(cur)
-        elif line.startswith('new file mode') and files:
-            pass
-        elif line.startswith('@@') and cur is not None:
-            m = re.match(r'@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', line)
-            if m:
-                hunk = Hunk(int(m.group(1)), int(m.group(2) or 1))
-                cur.hunks.append(hunk)
-                hunk._next = hunk.start
-        elif cur is not None and hunk is not None and line.startswith('-'):
-            hunk.removed_lines.append(line[1:])
-        elif cur is not None and hunk is not None and line.startswith('+') and not line.startswith('+++'):
-            hunk.added_lines.append((hunk._next, line[1:]))
-            hunk._next += 1
-    status = {}
-    for ln in git(root, 'diff', '--name-status', base).splitlines():
-        parts = ln.split('\t')
-        if len(parts) >= 2:
-            status[parts[-1]] = parts[0][0]
-    for f in files:
-        f.status = status.get(f.path, 'M')
-    if include_worktree:   # local runs: brand-new files that are not added to git yet
-        seen = {f.path for f in files}
-        for rel in git(root, 'ls-files', '--others', '--exclude-standard').splitlines():
-            if rel in seen or rel.startswith('.t7/') or any(rel.startswith(i) or f'/{i}' in rel for i in ignore):
-                continue
-            path = root / rel
+def _git_bytes(root, *args, stdin=None):
+    cmd = ['git', '--literal-pathspecs', '-c', 'core.quotePath=true', *args]
+    p = subprocess.run(cmd, cwd=root, input=stdin, capture_output=True, timeout=120)
+    if p.returncode:
+        raise RuntimeError(f'git {args[0]} failed: {os.fsdecode(p.stderr)[:400]}')
+    return p.stdout
+
+
+def _patch_path(header):
+    # With renames disabled, both halves contain the same pathname. Their byte
+    # lengths match even for C-quoted names, tabs, newlines or embedded " b/".
+    pair = header[len(b'diff --git '):]
+    half = len(pair) // 2
+    if pair[half:half + 1] != b' ':
+        raise ValueError('unexpected Git patch header')
+    name = pair[half + 1:]
+    if name.startswith(b'"'):
+        name, _ = codecs.escape_decode(name[1:-1])
+    if not name.startswith(b'b/'):
+        raise ValueError('unexpected Git destination prefix')
+    return os.fsdecode(name[2:])
+
+
+def _collect_hunks(root, revisions, paths, files):
+    patch = _git_bytes(root, 'diff', '--no-relative', '--no-renames', '--no-ext-diff',
+                       '--no-color', '--no-textconv', '--no-indent-heuristic', '--line-prefix=',
+                       '--src-prefix=a/', '--dst-prefix=b/', '--unified=0', *revisions, '--', *paths)
+    selected = set(paths)
+    current = hunk = None
+    line_number = 0
+    for raw in patch.split(b'\n'):
+        if raw.startswith(b'diff --git '):
+            path = _patch_path(raw)
+            current = files[path] if path in selected else None
+            hunk = None
+        elif current is None or current.skip_reason:
+            continue
+        elif raw.startswith(b'Binary files ') or raw == b'GIT binary patch':
+            current.skip_reason = 'binary file'
+            current.hunks.clear()
+        elif raw.startswith(b'@@ '):
+            match = re.match(rb'@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', raw)
+            if not match:
+                raise ValueError('unexpected Git hunk header')
+            line_number = int(match[1])
+            hunk = Hunk(line_number, int(match[2] or 1))
+            current.hunks.append(hunk)
+        elif hunk is not None and raw.startswith((b'-', b'+')):
             try:
-                if path.stat().st_size > 512_000:
-                    files.append(ChangedFile(path=rel, status='A', skip_reason='untracked file exceeds 512 KB'))
-                    continue
-                text = path.read_text()
-            except (OSError, UnicodeDecodeError):
-                files.append(ChangedFile(path=rel, status='A', skip_reason='binary or unreadable'))
+                text = raw[1:].removesuffix(b'\r').decode('utf-8')
+                if '\0' in text:
+                    raise ValueError
+            except ValueError:
+                current.skip_reason = 'binary or unsupported text encoding'
+                current.hunks.clear()
                 continue
-            lines = text.splitlines()
-            h = Hunk(1, len(lines))
-            h.added_lines = list(enumerate(lines, 1))
-            files.append(ChangedFile(path=rel, status='A', hunks=[h] if lines else []))
-    return [f for f in files if (root / f.path).exists() or f.status == 'D']
+            if raw.startswith(b'-'):
+                hunk.removed_lines.append(text)
+            else:
+                hunk.added_lines.append((line_number, text))
+                line_number += 1
+
+
+def _worktree_data(root, path):
+    try:
+        return read_file(root, path)
+    except (OSError, ValueError):
+        return None, 'unreadable file or unsupported path'
+
+
+def _add_whole_file(file, data):
+    try:
+        lines = data.decode('utf-8').splitlines()
+    except UnicodeDecodeError:
+        file.skip_reason = 'unsupported text encoding'
+        return
+    if lines:
+        file.hunks.append(Hunk(1, len(lines), added_lines=list(enumerate(lines, 1))))
+
+
+def included_path(path, ignore):
+    from .agent_config import FILES
+    return path in FILES or (not path.startswith('.t7/') and not any(
+        path.startswith(i) or f'/{i}' in path for i in ignore))
+
+
+def changed_files(root, base, include_worktree=True, ignore=()):
+    """Inventory every included change; extract hunks only for bounded, regular text files."""
+    root = Path(root).resolve()
+    revisions = [base]
+    if not include_worktree and has_commits(root):
+        revisions.append('HEAD')
+    raw = _git_bytes(root, 'diff', '--no-relative', '--raw', '--no-abbrev', '--no-renames',
+                     '--no-ext-diff', '--no-textconv', '-z', *revisions, '--')
+
+    records = raw.split(b'\0')[:-1]
+    entries = {}
+    objects = set()
+    for header, name in zip(records[::2], records[1::2]):
+        path = os.fsdecode(name)
+        if not included_path(path, ignore):
+            continue
+        before, after, old, new, status = header[1:].split()
+        entries[path] = (before, after, old, new, status.decode())
+        objects.update(oid for oid in (old, new) if oid.strip(b'0'))
+    sizes = {}
+    if objects:
+        info = _git_bytes(root, 'cat-file', '--batch-check=%(objectname) %(objectsize)',
+                          stdin=b'\n'.join(objects) + b'\n')
+        for row in info.splitlines():
+            oid, size = row.split()
+            # Gitlinks can legitimately refer to commits absent from this repository.
+            if size.isdigit():
+                sizes[oid] = int(size)
+    files, patches = {}, []
+    patch_bytes = arg_bytes = 0
+    for path, (before, after, old, new, status) in entries.items():
+        file = files[path] = ChangedFile(path, status)
+        if status == 'U':
+            file.skip_reason = 'unresolved Git merge conflict'
+            continue
+        if any(mode not in (b'000000', b'100644', b'100755') for mode in (before, after)):
+            file.skip_reason = 'symlink or non-regular file'
+            continue
+        if any(sizes.get(oid, 0) > MAX_BYTES for oid in (old, new)):
+            file.skip_reason = 'file exceeds 512 KB'
+            continue
+        byte_count = sizes.get(old, 0) + sizes.get(new, 0)
+        if include_worktree and status != 'D':
+            data, file.skip_reason = _worktree_data(root, path)
+            if file.skip_reason:
+                continue
+            if status == 'A':
+                _add_whole_file(file, data)
+                continue
+            byte_count += len(data)
+        path_bytes = len(os.fsencode(path)) + 1
+        if patches and (patch_bytes + byte_count > 4_000_000 or arg_bytes + path_bytes > 16_000):
+            _collect_hunks(root, revisions, patches, files)
+            patches = []
+            patch_bytes = arg_bytes = 0
+        patches.append(path)
+        patch_bytes += byte_count
+        arg_bytes += path_bytes
+    if patches:
+        _collect_hunks(root, revisions, patches, files)
+    if include_worktree:
+        names = _git_bytes(root, 'ls-files', '--others', '--exclude-standard', '-z')
+        for name in names.split(b'\0')[:-1]:
+            path = os.fsdecode(name)
+            if path.startswith('.t7/') or not included_path(path, ignore):
+                continue
+            previous = files.get(path)
+            if previous and previous.status != 'D':
+                continue
+            data, reason = _worktree_data(root, path)
+            if previous:
+                # Removed from the index, then recreated as an untracked file.
+                file = previous
+                file.status = 'M'
+                file.skip_reason = file.skip_reason or reason
+            else:
+                file = files[path] = ChangedFile(path, 'A', skip_reason=reason)
+            if not file.skip_reason:
+                _add_whole_file(file, data)
+    return list(files.values())
 
 
 def read(root, path, start=None, end=None, pad=0):
-    try:
-        lines = (root / path).read_text(errors='replace').splitlines()
-    except OSError:
+    data, reason = _worktree_data(Path(root).resolve(), path)
+    if reason:
         return ''
+    lines = data.decode('utf-8', errors='replace').splitlines()
     if start is None:
         return '\n'.join(lines)
     s, e = max(1, start - pad), min(len(lines), (end or start) + pad)
@@ -159,10 +267,10 @@ def read(root, path, start=None, end=None, pad=0):
 
 
 def numbered(root, path, max_lines=900):
-    try:
-        lines = (root / path).read_text(errors='replace').splitlines()
-    except OSError:
+    data, reason = _worktree_data(Path(root).resolve(), path)
+    if reason:
         return ''
+    lines = data.decode('utf-8', errors='replace').splitlines()
     return '\n'.join(f'{i:>5} | {l}' for i, l in enumerate(lines[:max_lines], 1))
 
 
@@ -187,13 +295,14 @@ def worktree(root, ref='HEAD', with_uncommitted=True):
     try:
         if with_uncommitted:
             dirty = git(root, 'diff', 'HEAD', '--binary')
-            untracked = git(root, 'ls-files', '--others', '--exclude-standard').splitlines()
+            untracked = [os.fsdecode(name) for name in _git_bytes(
+                root, 'ls-files', '--others', '--exclude-standard', '-z').split(b'\0')[:-1]]
             if dirty.strip():
                 subprocess.run(['git', 'apply', '--whitespace=nowarn'], cwd=path,
                                input=dirty, text=True, capture_output=True)
             for rel in [u for u in untracked if not u.startswith('.t7/')][:500]:
                 src, dst = root / rel, path / rel
-                if src.is_file():
+                if not src.is_symlink() and src.is_file() and src.resolve().is_relative_to(root.resolve()):
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(src, dst)
             if dirty.strip() or untracked:

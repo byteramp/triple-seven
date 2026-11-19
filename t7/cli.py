@@ -57,11 +57,12 @@ def cmd_scan(a):
     res = scan_repo(base=gitops.EMPTY_TREE if a.all else a.base, fix=not a.no_fix, ci=a.ci,
                     quiet=a.quiet or a.json)
     if res.get('no_changes') and not a.json:
-        print('Nothing changed compared with the base branch. Review the whole repository with:\n'
-              '  t7 scan --all')
-        return 0
+        print(res.get('scope_message') or 'No reviewable changes against the base.')
+        print(f"Recorded gate: {res['gate']['verdict'].upper()}")
+        return int(res['gate']['verdict'] == 'block')
     if a.json:
         print(json.dumps({
+            'no_changes': bool(res.get('no_changes')), 'scope_message': res.get('scope_message', ''),
             'coverage': res.get('coverage'), 'gate': res.get('gate'), 'run_id': res.get('run_id'), 'seconds': res.get('seconds'),
             'findings': [{'sec_req_id': res['sec_ids'].get(h.fingerprint), **h.to_api(True)}
                          for h in res.get('surfaced') or []],
@@ -73,6 +74,16 @@ def cmd_scan(a):
     if res.get('status_posted'):
         return 0   # the "Triple Seven" commit status carries the gate (can be cleared by /t7 decisions)
     return 1 if verdict == 'block' else 0
+
+
+def cmd_setup_repo(a):
+    from .orchestrator import scan_repo
+    result = scan_repo(setup_repo=True, fix=False, rebuild=a.rebuild)
+    print(result.get('scope_message') or 'Repository baseline recorded.')
+    print('Share the marker through your usual commit / PR workflow:')
+    print('  git add -f -- .t7/repository.json')
+    print(f"Baseline gate: {result['gate']['verdict'].upper()} (run {result['run_id']})")
+    return int(result['gate']['verdict'] == 'block')
 
 
 def _index(root):
@@ -410,8 +421,8 @@ def _finish(a):
         _register_editors(a.yes)
     print('\nYou are set. Next:')
     print('  t7 scan                review your current change (branch + uncommitted work)')
-    print('  t7 scan --all          review the whole repository')
-    print('  In your editor\'s AI chat: "review my change with Triple Seven"')
+    print('  t7 scan --no-fix       review without preparing fixes')
+    print('  In your editor\'s AI chat: "Call t7_scan with all=false and fix=false for this repository."')
     return 0
 
 
@@ -538,6 +549,9 @@ def main(argv=None):
     su.add_argument('--yes', '-y', action='store_true', help='register editors without asking')
     su.add_argument('--api-url', help='API base URL (default https://t7.byteramp.se/api)')
     su.set_defaults(fn=cmd_setup)
+    sr = sub.add_parser('setup-repo', help='initialize the shared repository map (repository owner)')
+    sr.add_argument('--rebuild', action='store_true', help='start a new map generation on the clean default branch')
+    sr.set_defaults(fn=cmd_setup_repo)
     ed = sub.add_parser('editors', help='add Triple Seven to VS Code, Cursor, Windsurf, Claude Code, Codex')
     ed.add_argument('--show', action='store_true', help='print the configs instead of writing them')
     ed.set_defaults(fn=cmd_editors)
@@ -565,7 +579,7 @@ def main(argv=None):
     lo.add_argument('--default', action='store_true')
     lo.set_defaults(fn=cmd_logout)
     s = sub.add_parser('scan', help='review the current change')
-    s.add_argument('--base', help='base ref (default: merge-base with origin/main)')
+    s.add_argument('--base', help='base ref (default: reviewed ancestor in initialized repositories)')
     s.add_argument('--all', action='store_true', help='review the whole repository, not just the change')
     s.add_argument('--no-fix', action='store_true', help='skip fix generation')
     s.add_argument('--ci', action='store_true', help='CI mode (PR comment, committed diff only)')
